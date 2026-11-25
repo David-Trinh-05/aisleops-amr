@@ -3,12 +3,15 @@
 from pathlib import Path
 from uuid import uuid4
 
+from ament_index_python.packages import get_package_share_path
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, GroupAction
+from launch.actions import IncludeLaunchDescription, OpaqueFunction
 from launch.actions import SetEnvironmentVariable, Shutdown
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, PushROSNamespace, SetRemap
 import xacro
 
 
@@ -65,6 +68,23 @@ def start(context):
                 on_exit=Shutdown(reason="Ground truth bridge exited"),
             )
         )
+    if IfCondition(LaunchConfiguration("slam")).evaluate(context):
+        slam_launch = get_package_share_path("slam_toolbox") / "launch/online_async_launch.py"
+        actions.append(
+            GroupAction([
+                PushROSNamespace(namespace),
+                SetRemap(src="/clock", dst="clock"),
+                SetRemap(src="/tf", dst="tf"),
+                SetRemap(src="/tf_static", dst="tf_static"),
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(str(slam_launch)),
+                    launch_arguments={
+                        "slam_params_file": str(root / "config/slam.yaml"),
+                        "use_sim_time": "true",
+                    }.items(),
+                ),
+            ])
+        )
     return actions
 
 
@@ -72,6 +92,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("gui", default_value="false", description="Show the Gazebo GUI"),
         DeclareLaunchArgument("namespace", default_value="aisleops", description="ROS topic namespace"),
+        DeclareLaunchArgument("slam", default_value="false", description="Build a map with SLAM Toolbox"),
         DeclareLaunchArgument(
             "ground_truth", default_value="false", description="Publish pose for evaluation",
         ),

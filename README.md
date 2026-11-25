@@ -17,6 +17,29 @@ ros2 launch launch/warehouse.launch.py gui:=true
 
 The default ROS namespace is `/aisleops`. Send motion commands on `/aisleops/cmd_vel` as `geometry_msgs/msg/TwistStamped`. The simulation publishes `scan`, `imu` and `odom` in the same namespace. [ROS–Gazebo bridge documentation](https://github.com/gazebosim/ros_gz/blob/jazzy/ros_gz_bridge/README.md)
 
+## Build and save a warehouse map
+
+```bash
+sudo apt install ros-jazzy-slam-toolbox ros-jazzy-nav2-map-server ros-jazzy-teleop-twist-keyboard
+source /opt/ros/jazzy/setup.bash
+ros2 launch launch/warehouse.launch.py slam:=true gui:=true
+```
+
+SLAM Toolbox uses simulated `/aisleops/clock`, the namespaced 2D LiDAR scan and robot TF. It publishes an occupancy grid at `/aisleops/map` with 0.05 m cells and supplies the `map → odom` transform. [SLAM Toolbox](https://github.com/SteveMacenski/slam_toolbox) · [Nav2 mapping guide](https://docs.nav2.org/jazzy/tutorials/general_tutorials/navigation2_with_slam/navigation2_with_slam/)
+
+In a second terminal, source ROS and drive the robot around both shelf rows and through the center aisle. Stop the robot and exit teleop before saving the grid.
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -p stamped:=true -r cmd_vel:=/aisleops/cmd_vel
+mkdir -p ~/aisleops-maps
+map_dir=$(mktemp -d ~/aisleops-maps/warehouse.XXXXXX)
+ros2 run nav2_map_server map_saver_cli -t /aisleops/map \
+  -f "$map_dir/warehouse" --fmt pgm --mode trinary
+```
+
+The saver writes `warehouse.yaml` and `warehouse.pgm`. Keep the two files together when loading them into Nav2 Map Server. A headless run produced a **278 × 199** grid that Nav2 Map Server restored cell for cell. [Nav2 Map Server](https://api.nav2.org/nav2-jazzy/html/md_nav2_map_server_README.html)
+
 ## Measure odometry error
 
 ```bash
