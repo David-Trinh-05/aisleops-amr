@@ -12,6 +12,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, PushROSNamespace, SetRemap
+from launch_ros.descriptions import ParameterFile
 import xacro
 
 
@@ -20,14 +21,60 @@ def spawn_finished(event, context):
         raise RuntimeError(f"Warehouse robot spawn failed with exit code {event.returncode}")
 
 
+def navigation_nodes(root, namespace, map_file):
+    from nav2_common.launch import RewrittenYaml
+
+    config = ParameterFile(RewrittenYaml(
+        source_file=str(root / "config/nav2.yaml"),
+        root_key=namespace, param_rewrites={}, convert_types=True,
+    ))
+    # Costmap child nodes have their own namespace under the robot.
+    prefix = f"/{namespace}" if namespace else ""
+    remaps = [(f"/{topic}", f"{prefix}/{topic}") for topic in ("clock", "tf", "tf_static")]
+    velocity_remap = [("cmd_vel", "cmd_vel_nav")]
+    specs = [
+        ("nav2_map_server", "map_server", {"yaml_filename": str(map_file)}, []),
+        ("nav2_amcl", "amcl", {}, []),
+        ("nav2_controller", "controller_server", {}, velocity_remap + [("scan", f"{prefix}/scan")]),
+        ("nav2_planner", "planner_server", {}, [("map", f"{prefix}/map")]),
+        ("nav2_behaviors", "behavior_server", {}, velocity_remap),
+        ("nav2_velocity_smoother", "velocity_smoother", {}, velocity_remap),
+        ("nav2_collision_monitor", "collision_monitor", {}, []),
+        ("nav2_bt_navigator", "bt_navigator", {}, []),
+    ]
+    nodes = [
+        Node(
+            package=package, executable=name, name=name, namespace=namespace, output="screen",
+            parameters=[config, {"use_sim_time": True, **overrides}], remappings=remaps + extra_remaps,
+            on_exit=Shutdown(reason=f"{name} exited"),
+        )
+        for package, name, overrides, extra_remaps in specs
+    ]
+    nodes.append(Node(
+        package="nav2_lifecycle_manager", executable="lifecycle_manager",
+        name="lifecycle_manager_nav2", namespace=namespace, output="screen",
+        parameters=[{"autostart": True, "node_names": [name for _, name, _, _ in specs]}],
+        on_exit=Shutdown(reason="Nav2 lifecycle manager exited"),
+    ))
+    return nodes
+
+
 def start(context):
     root = Path(__file__).resolve().parents[1]
+    namespace = LaunchConfiguration("namespace").perform(context).strip("/")
+    slam = IfCondition(LaunchConfiguration("slam")).evaluate(context)
+    map_yaml = LaunchConfiguration("map").perform(context)
+    if slam and map_yaml:
+        raise RuntimeError("Choose slam:=true for mapping or map:=<yaml> for AMCL navigation.")
+    if map_yaml:
+        map_file = Path(map_yaml).expanduser().resolve()
+        if not map_file.is_file():
+            raise RuntimeError(f"Map YAML file does not exist: {map_file}")
     ground_truth = IfCondition(LaunchConfiguration("ground_truth")).evaluate(context)
     description = xacro.process_file(
         str(root / "description/aisleops.urdf.xacro"),
         mappings={"ground_truth": str(ground_truth).lower()},
     ).toxml()
-    namespace = LaunchConfiguration("namespace")
     gz_command = ["gz", "sim", "-r"]
     if not IfCondition(LaunchConfiguration("gui")).evaluate(context):
         gz_command += ["-s", "--headless-rendering"]
@@ -68,7 +115,7 @@ def start(context):
                 on_exit=Shutdown(reason="Ground truth bridge exited"),
             )
         )
-    if IfCondition(LaunchConfiguration("slam")).evaluate(context):
+    if slam:
         slam_launch = get_package_share_path("slam_toolbox") / "launch/online_async_launch.py"
         actions.append(
             GroupAction([
@@ -85,6 +132,8 @@ def start(context):
                 ),
             ])
         )
+    if map_yaml:
+        actions.extend(navigation_nodes(root, namespace, map_file))
     return actions
 
 
@@ -93,6 +142,7 @@ def generate_launch_description():
         DeclareLaunchArgument("gui", default_value="false", description="Show the Gazebo GUI"),
         DeclareLaunchArgument("namespace", default_value="aisleops", description="ROS topic namespace"),
         DeclareLaunchArgument("slam", default_value="false", description="Build a map with SLAM Toolbox"),
+        DeclareLaunchArgument("map", default_value="", description="Map YAML for AMCL and Nav2"),
         DeclareLaunchArgument(
             "ground_truth", default_value="false", description="Publish pose for evaluation",
         ),

@@ -40,6 +40,27 @@ ros2 run nav2_map_server map_saver_cli -t /aisleops/map \
 
 The saver writes `warehouse.yaml` and `warehouse.pgm`. Keep the two files together when loading them into Nav2 Map Server. A headless run produced a **278 × 199** grid that Nav2 Map Server restored cell for cell. [Nav2 Map Server](https://api.nav2.org/nav2-jazzy/html/md_nav2_map_server_README.html)
 
+## Navigate on a saved map
+
+Use a map built from this warehouse and spawn pose. Passing `map:=` loads the saved map, starts AMCL at the known simulation spawn `(0, 0, 0)` in the map frame, and activates Nav2. Run this in a fresh session after stopping the mapping launch. [AMCL configuration](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/others/configuring_amcl/)
+
+```bash
+sudo apt install ros-jazzy-navigation2
+source /opt/ros/jazzy/setup.bash
+ros2 launch launch/warehouse.launch.py map:=/path/to/warehouse.yaml gui:=true
+```
+
+After the lifecycle manager reports that the managed nodes are active, send the delivery-bay goal from another terminal with the ROS environment sourced.
+
+```bash
+ros2 action send_goal /aisleops/navigate_to_pose nav2_msgs/action/NavigateToPose \
+  '{pose: {header: {frame_id: map}, pose: {position: {x: 9.0, y: 3.5}, orientation: {w: 1.0}}}}'
+```
+
+NavFn plans through known free space, and Regulated Pure Pursuit follows the path. The local costmap uses live LiDAR and the robot footprint. Velocity commands pass through the velocity smoother and Collision Monitor to the Gazebo bridge as `TwistStamped`. [Nav2 controller server](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/configuring_controller_server/) · [Collision Monitor](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/configuring_collision_monitor_node/)
+
+A headless run reached the delivery bay in **20.35 s** of simulation time. The settled Gazebo pose was **5.0 cm** from the goal, and AMCL had **5.0 cm XY RMSE** over 88 matched samples.
+
 ## Measure odometry error
 
 ```bash
