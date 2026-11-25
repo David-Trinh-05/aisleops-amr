@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Check the ROS–Gazebo data path with an isolated TurtleBot3 Burger."""
+"""Check the ROS–Gazebo data path with the reference robot or warehouse AMR."""
 
+import argparse
 from collections import deque
 from contextlib import suppress
 import math
@@ -22,11 +23,24 @@ from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from rclpy.time import Time
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import Imu, LaserScan
 from tf2_ros import Buffer, TransformListener
 
 
-def check_robot(processes, namespace):
+def forward_range(scan):
+    if scan.angle_min <= 0 <= scan.angle_max and scan.angle_increment > 0:
+        index = -scan.angle_min / scan.angle_increment
+        if 0 <= index < len(scan.ranges) - 0.5:
+            return scan.ranges[round(index)]
+    return math.nan
+
+
+def odom_yaw(odometry):
+    q = odometry.pose.pose.orientation
+    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+
+def check_robot(processes, namespace, warehouse):
     node = rclpy.create_node(
         "aisleops_smoke",
         namespace=namespace,
@@ -38,7 +52,10 @@ def check_robot(processes, namespace):
     transforms = Buffer(node=node)
     listener = TransformListener(transforms, node)
     messages = {}
-    for topic, message_type in (("odom", Odometry), ("scan", LaserScan)):
+    subscriptions = [("odom", Odometry), ("scan", LaserScan)]
+    if warehouse:
+        subscriptions.append(("imu", Imu))
+    for topic, message_type in subscriptions:
         node.create_subscription(
             message_type, topic,
             lambda msg: messages.__setitem__(type(msg), msg),
@@ -46,12 +63,14 @@ def check_robot(processes, namespace):
         )
     publisher = node.create_publisher(TwistStamped, "cmd_vel", 10)
     speed = 0.0
+    turn_rate = 0.0
 
     def publish_command():
         command = TwistStamped()
         command.header.stamp = node.get_clock().now().to_msg()
         command.header.frame_id = "base_footprint"
         command.twist.linear.x = speed
+        command.twist.angular.z = turn_rate
         publisher.publish(command)
 
     timer = node.create_timer(0.05, publish_command)
@@ -69,11 +88,13 @@ def check_robot(processes, namespace):
                 return
         odom = messages.get(Odometry)
         scan = messages.get(LaserScan)
+        imu = messages.get(Imu)
         raise RuntimeError(
             f"timed out waiting for {label} "
             f"(sim time {node.get_clock().now().nanoseconds / 1e9:.3f}s, "
             f"odom frame {odom.header.frame_id if odom else None!r}, "
-            f"scan frame {scan.header.frame_id if scan else None!r})"
+            f"scan frame {scan.header.frame_id if scan else None!r}, "
+            f"imu frame {imu.header.frame_id if imu else None!r})"
         )
 
     def sensors_ready():
@@ -83,16 +104,47 @@ def check_robot(processes, namespace):
             return False
         pose = odom.pose.pose.position
         scan_time = Time.from_msg(scan.header.stamp)
+        wall_distance = 11.25 if warehouse else 1.9
         return (
             odom.header.frame_id == "odom"
             and odom.child_frame_id == "base_footprint"
             and all(math.isfinite(value) for value in (pose.x, pose.y))
             and scan.header.frame_id == "base_scan"
             and len(scan.ranges) == 360
-            and 1.6 < scan.ranges[0] < 2.2  # Front ray hits the wall at x=1.9 m.
+            and abs(forward_range(scan) - wall_distance) < 0.3
             and 0 < scan_time.nanoseconds <= node.get_clock().now().nanoseconds
             and transforms.can_transform("odom", "base_scan", scan_time)
         )
+
+    def imu_ready():
+        imu = messages.get(Imu)
+        if imu is None or imu.header.frame_id != "imu_link":
+            return False
+        stamp = Time.from_msg(imu.header.stamp)
+        return (
+            0 < stamp.nanoseconds <= node.get_clock().now().nanoseconds
+            and 9.0 < imu.linear_acceleration.z < 10.6
+            and abs(imu.angular_velocity.z) < 0.05
+            and transforms.can_transform("base_link", "imu_link", stamp)
+        )
+
+    def stop_robot():
+        nonlocal speed, turn_rate
+        speed = turn_rate = 0.0
+        publish_command()
+        stop_time = node.get_clock().now().nanoseconds
+
+        def stopped():
+            odom = messages[Odometry]
+            twist = odom.twist.twist
+            return (
+                Time.from_msg(odom.header.stamp).nanoseconds - stop_time >= 350_000_000
+                and abs(twist.linear.x) < 0.02
+                and abs(twist.angular.z) < 0.03
+            )
+
+        wait_for("the robot to stop after publishing zero /cmd_vel", stopped)
+        return stop_time
 
     try:
         wait_for("the first /clock tick", lambda: node.get_clock().now().nanoseconds > 0)
@@ -103,11 +155,19 @@ def check_robot(processes, namespace):
         )
         wait_for("valid /odom, /scan and odom -> base_scan at the scan stamp", sensors_ready)
         scan = messages[LaserScan]
+        first_range = forward_range(scan)
         print(
             f"PASS  /clock advanced, /scan returned {len(scan.ranges)} rays "
-            f"(front {scan.ranges[0]:.3f} m), TF available at scan timestamp",
+            f"(front {first_range:.3f} m), TF available at scan timestamp",
             flush=True,
         )
+        if warehouse:
+            wait_for("a stationary /imu in imu_link", imu_ready)
+            print(
+                f"PASS  /imu is in imu_link, z acceleration "
+                f"{messages[Imu].linear_acceleration.z:.3f} m/s²",
+                flush=True,
+            )
 
         start = messages[Odometry].pose.pose.position.x
         speed = 0.12
@@ -116,42 +176,56 @@ def check_robot(processes, namespace):
             "forward motion after publishing /cmd_vel",
             lambda: messages[Odometry].pose.pose.position.x - start >= 0.10,
         )
-        speed = 0.0
-        publish_command()
-        stop_time = node.get_clock().now().nanoseconds
-        wait_for(
-            "the robot to stop after publishing zero /cmd_vel",
-            lambda: (
-                Time.from_msg(messages[Odometry].header.stamp).nanoseconds - stop_time
-                >= 350_000_000
-                and abs(messages[Odometry].twist.twist.linear.x) < 0.02
-            ),
-        )
+        stop_time = stop_robot()
         distance = messages[Odometry].pose.pose.position.x - start
-        print(f"PASS  /cmd_vel moved the robot {distance:.3f} m in /odom, then stopped")
+        print(f"PASS  /cmd_vel moved the robot {distance:.3f} m in /odom, then stopped", flush=True)
+
+        if warehouse:
+            wait_for(
+                "a fresh LiDAR scan after stopping",
+                lambda: Time.from_msg(messages[LaserScan].header.stamp).nanoseconds
+                >= stop_time + 350_000_000,
+            )
+            lidar_delta = first_range - forward_range(messages[LaserScan])
+            if not (lidar_delta > 0.05 and abs(lidar_delta - distance) < 0.06):
+                raise RuntimeError(
+                    f"wall distance changed by {lidar_delta:.3f} m for {distance:.3f} m of odometry"
+                )
+
+            start_yaw = odom_yaw(messages[Odometry])
+            start_turn = node.get_clock().now().nanoseconds
+            turn_rate = 0.35
+
+            def turning():
+                imu = messages[Imu]
+                yaw_delta = odom_yaw(messages[Odometry]) - start_yaw
+                return (
+                    0.25 <= yaw_delta < 0.8
+                    and Time.from_msg(imu.header.stamp).nanoseconds > start_turn
+                    and 0.15 < imu.angular_velocity.z < 0.7
+                )
+
+            wait_for("a positive yaw change in /odom and matching /imu angular velocity", turning)
+            gyro = messages[Imu].angular_velocity.z
+            stop_robot()
+            yaw_delta = odom_yaw(messages[Odometry]) - start_yaw
+            print(
+                f"PASS  LiDAR wall distance decreased {lidar_delta:.3f} m; "
+                f"robot rotated +{yaw_delta:.3f} rad with gyro +{gyro:.3f} rad/s, then stopped",
+                flush=True,
+            )
     finally:
         listener.unregister()
         node.destroy_node()
 
 
-def run(log_dir):
+def turtlebot_commands(root, namespace):
     share = get_package_share_path("turtlebot3_gazebo")
-    world = Path(__file__).resolve().parents[1] / "worlds" / "smoke.sdf"
-    run_id = uuid4().hex
-    namespace = f"/aisleops_{run_id}"
-    os.environ.update(
-        {
-            "GZ_SIM_RESOURCE_PATH": str(share / "models"),
-            "GZ_PARTITION": f"aisleops-{run_id}",
-            "ROS_DOMAIN_ID": str(170 + secrets.randbelow(40)),
-            "ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
-            "ROS_LOG_DIR": str(log_dir),
-        }
-    )
-    os.environ.pop("ROS_STATIC_PEERS", None)
-    os.environ.pop("ROS_LOCALHOST_ONLY", None)
-    commands = {
-        "gazebo": ["gz", "sim", "-s", "-r", "--headless-rendering", str(world)],
+    os.environ["GZ_SIM_RESOURCE_PATH"] = str(share / "models")
+    return {
+        "gazebo": [
+            "gz", "sim", "-s", "-r", "--headless-rendering", str(root / "worlds/smoke.sdf"),
+        ],
         "spawn": [
             "ros2", "run", "ros_gz_sim", "create", "-world", "smoke",
             "-name", "burger", "-z", "0.01",
@@ -165,11 +239,36 @@ def run(log_dir):
         "robot-state": [
             "ros2", "run", "robot_state_publisher", "robot_state_publisher",
             "--ros-args", "-r", f"__ns:={namespace}",
-            "-r", "/tf:=tf", "-r", "/tf_static:=tf_static",
+            "-r", "/clock:=clock", "-r", "/tf:=tf", "-r", "/tf_static:=tf_static",
             "-p", "use_sim_time:=true",
             "-p", "robot_description:=" + (share / "urdf/turtlebot3_burger.urdf").read_text(),
         ],
     }
+
+
+def run(log_dir, warehouse):
+    root = Path(__file__).resolve().parents[1]
+    run_id = uuid4().hex
+    namespace = f"/aisleops_{run_id}"
+    os.environ.update(
+        {
+            "GZ_PARTITION": f"aisleops-{run_id}",
+            "ROS_DOMAIN_ID": str(170 + secrets.randbelow(40)),
+            "ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
+            "ROS_LOG_DIR": str(log_dir),
+        }
+    )
+    os.environ.pop("ROS_STATIC_PEERS", None)
+    os.environ.pop("ROS_LOCALHOST_ONLY", None)
+    if warehouse:
+        commands = {
+            "warehouse": [
+                "ros2", "launch", str(root / "launch/warehouse.launch.py"),
+                f"namespace:={namespace}", f"gz_partition:={os.environ['GZ_PARTITION']}",
+            ],
+        }
+    else:
+        commands = turtlebot_commands(root, namespace)
     processes = {}
     try:
         for name, command in commands.items():
@@ -179,7 +278,7 @@ def run(log_dir):
                 )
         rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
         try:
-            check_robot(processes, namespace)
+            check_robot(processes, namespace, warehouse)
         finally:
             rclpy.shutdown()
     finally:
@@ -199,11 +298,14 @@ def interrupt(_signal_number, _frame):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--warehouse", action="store_true", help="check the custom AMR in the warehouse")
+    args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupt)
     with TemporaryDirectory(prefix="aisleops-smoke-") as directory:
         log_dir = Path(directory)
         try:
-            run(log_dir)
+            run(log_dir, args.warehouse)
         except KeyboardInterrupt:
             sys.exit(130)
         except (RuntimeError, OSError, PackageNotFoundError) as error:
