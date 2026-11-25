@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <robot name="aisleops" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="ground_truth" default="false"/>
   <xacro:property name="wheel_radius" value="0.09"/>
   <xacro:property name="wheel_width" value="0.045"/>
   <xacro:property name="wheel_separation" value="0.41"/>
@@ -160,4 +161,14 @@
       <joint_name>right_wheel_joint</joint_name>
     </plugin>
   </gazebo>
+
+  <xacro:if value="$(arg ground_truth)">
+    <gazebo>
+      <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+        <publish_model_pose>true</publish_model_pose>
+        <publish_link_pose>false</publish_link_pose>
+        <update_frequency>50</update_frequency>
+      </plugin>
+    </gazebo>
+  </xacro:if>
 </robot>

@@ -1,0 +1,6 @@
+- ros_topic_name: evaluation/ground_truth
+  gz_topic_name: /model/aisleops/pose
+  ros_type_name: geometry_msgs/msg/PoseStamped
+  gz_type_name: gz.msgs.Pose
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA

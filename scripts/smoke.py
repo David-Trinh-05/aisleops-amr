@@ -26,6 +26,8 @@ from rclpy.time import Time
 from sensor_msgs.msg import Imu, LaserScan
 from tf2_ros import Buffer, TransformListener
 
+from trajectory import run_trajectory, yaw
+
 
 def forward_range(scan):
     if scan.angle_min <= 0 <= scan.angle_max and scan.angle_increment > 0:
@@ -36,11 +38,10 @@ def forward_range(scan):
 
 
 def odom_yaw(odometry):
-    q = odometry.pose.pose.orientation
-    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+    return yaw(odometry.pose.pose.orientation)
 
 
-def check_robot(processes, namespace, warehouse):
+def check_robot(processes, namespace, warehouse, trajectory_output):
     node = rclpy.create_node(
         "aisleops_smoke",
         namespace=namespace,
@@ -75,7 +76,14 @@ def check_robot(processes, namespace, warehouse):
 
     timer = node.create_timer(0.05, publish_command)
     timer.cancel()
-    deadline = monotonic() + 45
+    deadline = monotonic() + (90 if trajectory_output else 45)
+
+    def drive(linear, angular):
+        nonlocal speed, turn_rate
+        speed, turn_rate = linear, angular
+        publish_command()
+        if timer.is_canceled():
+            timer.reset()
 
     def wait_for(label, condition):
         while monotonic() < deadline:
@@ -129,9 +137,7 @@ def check_robot(processes, namespace, warehouse):
         )
 
     def stop_robot():
-        nonlocal speed, turn_rate
-        speed = turn_rate = 0.0
-        publish_command()
+        drive(0.0, 0.0)
         stop_time = node.get_clock().now().nanoseconds
 
         def stopped():
@@ -168,6 +174,10 @@ def check_robot(processes, namespace, warehouse):
                 f"{messages[Imu].linear_acceleration.z:.3f} m/s²",
                 flush=True,
             )
+
+        if trajectory_output:
+            run_trajectory(node, wait_for, drive, stop_robot, trajectory_output)
+            return
 
         start = messages[Odometry].pose.pose.position.x
         speed = 0.12
@@ -246,7 +256,7 @@ def turtlebot_commands(root, namespace):
     }
 
 
-def run(log_dir, warehouse):
+def run(log_dir, warehouse, trajectory_output):
     root = Path(__file__).resolve().parents[1]
     run_id = uuid4().hex
     namespace = f"/aisleops_{run_id}"
@@ -265,6 +275,7 @@ def run(log_dir, warehouse):
             "warehouse": [
                 "ros2", "launch", str(root / "launch/warehouse.launch.py"),
                 f"namespace:={namespace}", f"gz_partition:={os.environ['GZ_PARTITION']}",
+                f"ground_truth:={'true' if trajectory_output else 'false'}",
             ],
         }
     else:
@@ -278,7 +289,7 @@ def run(log_dir, warehouse):
                 )
         rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
         try:
-            check_robot(processes, namespace, warehouse)
+            check_robot(processes, namespace, warehouse, trajectory_output)
         finally:
             rclpy.shutdown()
     finally:
@@ -299,13 +310,17 @@ def interrupt(_signal_number, _frame):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--warehouse", action="store_true", help="check the custom AMR in the warehouse")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--warehouse", action="store_true", help="check the custom AMR in the warehouse")
+    mode.add_argument("--trajectory", type=Path, metavar="CSV", help="score the warehouse L-route")
     args = parser.parse_args()
+    if args.trajectory and (args.trajectory.exists() or not args.trajectory.parent.is_dir()):
+        parser.error("--trajectory requires a new CSV path in an existing directory")
     signal.signal(signal.SIGTERM, interrupt)
     with TemporaryDirectory(prefix="aisleops-smoke-") as directory:
         log_dir = Path(directory)
         try:
-            run(log_dir, args.warehouse)
+            run(log_dir, args.warehouse or bool(args.trajectory), args.trajectory)
         except KeyboardInterrupt:
             sys.exit(130)
         except (RuntimeError, OSError, PackageNotFoundError) as error:
