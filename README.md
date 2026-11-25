@@ -1,6 +1,6 @@
 # AisleOps AMR
 
-A ROS 2 simulation for evaluating an autonomous mobile robot in a warehouse. It includes a custom differential-drive robot, 2D LiDAR and IMU, and an evaluation tool that measures wheel odometry against Gazebo ground truth.
+A ROS 2 simulation for evaluating an autonomous mobile robot in a warehouse. It includes a custom differential-drive robot, 2D LiDAR and IMU, a three-leg Nav2 delivery mission, and an evaluation tool that measures wheel odometry against Gazebo ground truth.
 
 ## Run the warehouse simulation
 
@@ -60,6 +60,32 @@ ros2 action send_goal /aisleops/navigate_to_pose nav2_msgs/action/NavigateToPose
 NavFn plans through known free space, and Regulated Pure Pursuit follows the path. The local costmap uses live LiDAR and the robot footprint. Velocity commands pass through the velocity smoother and Collision Monitor to the Gazebo bridge as `TwistStamped`. [Nav2 controller server](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/configuring_controller_server/) · [Collision Monitor](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/core_servers/configuring_collision_monitor_node/)
 
 A headless run reached the delivery bay in **20.35 s** of simulation time. The settled Gazebo pose was **5.0 cm** from the goal, and AMCL had **5.0 cm XY RMSE** over 88 matched samples.
+
+## Run a delivery mission
+
+Keep the saved-map Nav2 launch running. In another terminal, build and run the C++ mission client.
+
+```bash
+sudo apt install python3-colcon-common-extensions
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths src --packages-select aisleops_mission \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+source install/local_setup.bash
+ros2 run aisleops_mission delivery_mission --ros-args \
+  -r __ns:=/aisleops -r /clock:=/aisleops/clock -p use_sim_time:=true
+```
+
+The client waits for Nav2 to become active, then sends a `NavigateToPose` goal for each stop. A leg advances after Nav2 reports success and fresh odometry shows that the robot has settled. The node logs progress and publishes it on `/aisleops/mission_status`. A deadline or Ctrl+C requests cancellation of the active goal and ends the mission. [ROS 2 actions](https://design.ros2.org/articles/actions.html)
+
+| Leg | Pose in `map` | ROS parameter |
+| --- | --- | --- |
+| Receive | `[0.0, -3.5, 0.0]` | `receive_pose` |
+| Deliver | `[9.0, 3.5, 0.0]` | `deliver_pose` |
+| Return | `[0.0, 0.0, 0.0]` | `return_pose` |
+
+The pose arrays use meters and radians in `[x, y, yaw]` order. `leg_timeout_sec` is the wall-clock deadline after goal acceptance and defaults to 75 seconds.
+
+A headless run completed all three goals in about **64 seconds** of simulation time. The settled positions measured in Gazebo were within **14 cm** of their targets.
 
 ## Measure odometry error
 
