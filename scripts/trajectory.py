@@ -124,12 +124,12 @@ def score(odometry, truth, phases, end_ns, output):
         output.hardlink_to(staged)
     print(
         f"RESULT  matched {len(rows)}/{len(odometry)} samples, "
-        f"XY RMSE {rmse:.4f} m, max XY error {max_xy:.4f} m, max yaw error {max_yaw:.4f} rad",
+        f"XY RMSE {rmse:.6f} m, max XY error {max_xy:.6f} m, max yaw error {max_yaw:.6f} rad",
         flush=True,
     )
     print(
         f"RESULT  Gazebo endpoint ({final.actual.x:.3f}, {final.actual.y:.3f}) m, "
-        f"yaw {final.actual.yaw:.3f} rad; final XY error {final.xy_error:.4f} m",
+        f"yaw {final.actual.yaw:.3f} rad; final XY error {final.xy_error:.6f} m",
         flush=True,
     )
     print(f"CSV   {output}", flush=True)

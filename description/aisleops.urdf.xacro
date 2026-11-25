@@ -4,6 +4,8 @@
   <xacro:property name="wheel_radius" value="0.09"/>
   <xacro:property name="wheel_width" value="0.045"/>
   <xacro:property name="wheel_separation" value="0.41"/>
+  <!-- Effective track measured on the Gazebo warehouse floor using a stationary turn. -->
+  <xacro:property name="rolling_track" value="0.365"/>
   <xacro:property name="base_height" value="0.12"/>
 
   <material name="teal"><color rgba="0.04 0.42 0.44 1"/></material>
@@ -142,7 +144,7 @@
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <left_joint>left_wheel_joint</left_joint>
       <right_joint>right_wheel_joint</right_joint>
-      <wheel_separation>${wheel_separation}</wheel_separation>
+      <wheel_separation>${rolling_track}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
       <topic>/cmd_vel</topic>
       <odom_topic>/odom</odom_topic>

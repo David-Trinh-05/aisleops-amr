@@ -4,7 +4,7 @@ A ROS 2 simulation for evaluating an autonomous mobile robot in a warehouse. It 
 
 ## Run the warehouse simulation
 
-The custom differential-drive AMR uses a Xacro description with a 0.48 × 0.34 m chassis, a 0.41 m wheel track, 2D LiDAR and IMU. The 14 × 10 m warehouse has two shelf rows and marked receiving and delivery bays. All geometry is local. [Gazebo URDF spawning](https://gazebosim.org/docs/harmonic/spawn_urdf/) · [DiffDrive system](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1DiffDrive.html)
+The custom differential-drive AMR uses a Xacro description with a 0.48 × 0.34 m chassis, 0.410 m between wheel centers, 2D LiDAR and IMU. The 14 × 10 m warehouse has two shelf rows and marked receiving and delivery bays. All geometry is local. [Gazebo URDF spawning](https://gazebosim.org/docs/harmonic/spawn_urdf/) · [DiffDrive system](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1DiffDrive.html)
 
 Use Ubuntu 24.04 with ROS 2 Jazzy and Gazebo Harmonic. The headless LiDAR uses an EGL-capable renderer. [ROS and Gazebo compatibility](https://gazebosim.org/docs/harmonic/ros_installation/) · [Gazebo headless rendering](https://gazebosim.org/api/sim/8/headless_rendering.html)
 
@@ -25,7 +25,16 @@ The default ROS namespace is `/aisleops`. Send motion commands on `/aisleops/cmd
 
 The runner drives a timed L route of about 1 m forward, a 90° left turn, then 1 m forward. Gazebo publishes ground truth at 50 Hz on an evaluation topic enabled with `ground_truth:=true`. The runner interpolates ground truth at each odometry timestamp and applies the fixed spawn transform to compare both poses in the warehouse frame. It rejects extrapolation and gaps over 100 ms in ground truth. [Gazebo Harmonic PosePublisher source](https://github.com/gazebosim/gz-sim/blob/gz-sim8_8.11.0/src/systems/pose_publisher/PosePublisher.cc)
 
-One headless run paired 363 of 363 samples and measured **0.068 m XY RMSE** and **0.193 m final XY error**. The body turned about 101° in Gazebo while wheel odometry reported about 90°. The CSV records both poses and the errors for each leg.
+The Gazebo DiffDrive plugin uses an effective rolling track of 0.365 m, estimated from a stationary turn on the warehouse floor. It uses this value to generate wheel commands and integrate odometry. [Gazebo Harmonic DiffDrive source](https://github.com/gazebosim/gz-sim/blob/gz-sim8_8.11.0/src/systems/diff_drive/DiffDrive.cc)
+
+In Gazebo Harmonic 8.11.0, the L route paired 363 of 363 samples with each configuration. These results describe the simulated warehouse surface and model.
+
+| DiffDrive rolling track | Peak yaw error | Final XY error |
+| --- | ---: | ---: |
+| 0.410 m | 11.10° | 193.3 mm |
+| 0.365 m | <0.01° | <0.1 mm |
+
+The CSV records both poses and the errors for each leg.
 
 ## Verify the simulation
 
