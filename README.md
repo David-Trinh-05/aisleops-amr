@@ -107,6 +107,10 @@ The monitor uses TF at the scan timestamp to project finite LiDAR endpoints into
 
 The diagnostic distinguishes `matching`, `low_agreement`, `insufficient_overlap` and stale inputs. A full nominal delivery mission reported **639/639** matching scans, with a minimum agreement of **0.9666**. In a separate test, shifting the monitor's reference map by 0.65 m on each axis gave a median agreement of **0.1413** across 10 scans. Similar aisle geometry can produce high agreement for several poses.
 
+The same diagnostic carries a `health_state` for consumers that need evidence across scans. A low scan marks the estimate `suspect`. Three consecutive low scans confirm `lost`, while five matching scans establish or restore `tracking`. Missing or unsupported measurements report `unavailable`, preserving any confirmed loss until matching evidence returns.
+
+In one simulation experiment, Gazebo relocated the robot body by **5.11 m** during the receiving leg. Wheel odometry changed **1.2 cm** over the same 20 ms interval. The monitor reported `lost` after **0.20 s** of simulation time.
+
 ## Measure odometry error
 
 ```bash

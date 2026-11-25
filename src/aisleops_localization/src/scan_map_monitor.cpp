@@ -20,6 +20,8 @@
 #include <tf2_ros/message_filter.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "scan_health.hpp"
+
 namespace
 {
 using namespace std::chrono_literals;
@@ -145,6 +147,7 @@ public:
 private:
   void update_map(Grid::ConstSharedPtr map)
   {
+    health_.unavailable();
     const auto & info = map->info;
     if (map->header.frame_id != map_frame_ || info.width == 0 || info.height == 0 ||
       !(std::isfinite(info.resolution) && info.resolution > 0.0) ||
@@ -180,7 +183,7 @@ private:
       scan->range_max <= scan->range_min)
     {
       last_evaluated_ = last_received_;
-      report(Status::STALE, "invalid_scan", now());
+      report_unavailable(Status::STALE, "invalid_scan", now());
       return;
     }
     filter_->add(scan);
@@ -192,10 +195,10 @@ private:
       return;
     }
     const rclcpp::Time stamp(scan.header.stamp);
-    const double age = (now() - stamp).seconds();
+    const double age = (sample_clock() - stamp).seconds();
     if (age > 0.75 || age < -0.05) {
       last_evaluated_ = SteadyClock::now();
-      report(Status::STALE, "stale_scan_stamp", stamp);
+      report_unavailable(Status::STALE, "stale_scan_stamp", stamp);
       return;
     }
     tf2::Transform map_from_scan;
@@ -226,23 +229,43 @@ private:
     if (counts.comparable < static_cast<std::size_t>(minimum_returns_) ||
       counts.known_fraction() < minimum_known_)
     {
-      report(Status::WARN, "insufficient_overlap", stamp, &counts);
+      report_unavailable(Status::WARN, "insufficient_overlap", stamp, &counts);
     } else if (counts.match_fraction() < minimum_match_) {
+      health_.observe(false, stamp.nanoseconds());
       report(Status::WARN, "low_agreement", stamp, &counts);
     } else {
+      health_.observe(true, stamp.nanoseconds());
       report(Status::OK, "matching", stamp, &counts);
     }
   }
 
   void check_streams()
   {
+    const auto time = sample_clock();
     if (!map_) {
-      report(Status::STALE, map_status_, now());
+      report_unavailable(Status::STALE, map_status_, time);
     } else if (SteadyClock::now() - last_received_ >= 750ms) {
-      report(Status::STALE, "no_recent_scan", now());
+      report_unavailable(Status::STALE, "no_recent_scan", time);
     } else if (SteadyClock::now() - last_evaluated_ >= 750ms) {
-      report(Status::STALE, "transform_unavailable", now());
+      report_unavailable(Status::STALE, "transform_unavailable", time);
     }
+  }
+
+  rclcpp::Time sample_clock()
+  {
+    const auto current = now();
+    if (current.nanoseconds() < last_clock_ns_) {
+      health_.reset_time();
+    }
+    last_clock_ns_ = current.nanoseconds();
+    return current;
+  }
+
+  void report_unavailable(std::uint8_t level, const std::string & reason, const rclcpp::Time & time,
+    const Counts * counts = nullptr)
+  {
+    health_.unavailable();
+    report(level, reason, time, counts);
   }
 
   void report(std::uint8_t level, const std::string & message, const rclcpp::Time & time,
@@ -256,17 +279,21 @@ private:
     status.hardware_id = "warehouse_lidar";
     status.level = level;
     status.message = message;
+    const auto add = [&status](const char * key, const std::string & value) {
+        auto & entry = status.values.emplace_back();
+        entry.key = key;
+        entry.value = value;
+      };
+    add("health_state", health_.label());
+    add("loss_latched", health_.loss_latched() ? "true" : "false");
+    add("consecutive_low", std::to_string(health_.low_count()));
+    add("consecutive_matching", std::to_string(health_.matching_count()));
     if (counts) {
-      const auto add = [&status](const char * key, auto value) {
-          auto & entry = status.values.emplace_back();
-          entry.key = key;
-          entry.value = std::to_string(value);
-        };
-      add("finite_returns", counts->returns);
-      add("comparable_returns", counts->comparable);
-      add("matched_returns", counts->matched);
-      add("known_fraction", counts->known_fraction());
-      add("match_fraction", counts->match_fraction());
+      add("finite_returns", std::to_string(counts->returns));
+      add("comparable_returns", std::to_string(counts->comparable));
+      add("matched_returns", std::to_string(counts->matched));
+      add("known_fraction", std::to_string(counts->known_fraction()));
+      add("match_fraction", std::to_string(counts->match_fraction()));
     }
     publisher_->publish(report);
   }
@@ -277,6 +304,8 @@ private:
   const double minimum_known_;
   const double minimum_match_;
   const int occupied_threshold_;
+  aisleops::ScanHealth health_;
+  std::int64_t last_clock_ns_{0};
   Grid::ConstSharedPtr map_;
   std::string map_status_{"waiting_for_map"};
   tf2::Transform grid_from_map_;
