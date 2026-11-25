@@ -63,9 +63,12 @@ def start(context):
     root = Path(__file__).resolve().parents[1]
     namespace = LaunchConfiguration("namespace").perform(context).strip("/")
     slam = IfCondition(LaunchConfiguration("slam")).evaluate(context)
+    scan_monitor = IfCondition(LaunchConfiguration("scan_monitor")).evaluate(context)
     map_yaml = LaunchConfiguration("map").perform(context)
     if slam and map_yaml:
         raise RuntimeError("Choose slam:=true for mapping or map:=<yaml> for AMCL navigation.")
+    if scan_monitor and not map_yaml:
+        raise RuntimeError("scan_monitor:=true requires a saved map passed with map:=<yaml>.")
     if map_yaml:
         map_file = Path(map_yaml).expanduser().resolve()
         if not map_file.is_file():
@@ -134,6 +137,13 @@ def start(context):
         )
     if map_yaml:
         actions.extend(navigation_nodes(root, namespace, map_file))
+    if scan_monitor:
+        actions.append(Node(
+            package="aisleops_localization", executable="scan_map_monitor",
+            namespace=namespace, output="screen",
+            parameters=[{"use_sim_time": True}],
+            remappings=[("/clock", "clock"), ("/tf", "tf"), ("/tf_static", "tf_static")],
+        ))
     return actions
 
 
@@ -143,6 +153,9 @@ def generate_launch_description():
         DeclareLaunchArgument("namespace", default_value="aisleops", description="ROS topic namespace"),
         DeclareLaunchArgument("slam", default_value="false", description="Build a map with SLAM Toolbox"),
         DeclareLaunchArgument("map", default_value="", description="Map YAML for AMCL and Nav2"),
+        DeclareLaunchArgument(
+            "scan_monitor", default_value="false", description="Report LiDAR agreement with the map",
+        ),
         DeclareLaunchArgument(
             "ground_truth", default_value="false", description="Publish pose for evaluation",
         ),

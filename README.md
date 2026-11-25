@@ -87,6 +87,26 @@ The pose arrays use meters and radians in `[x, y, yaw]` order. `leg_timeout_sec`
 
 A headless run completed all three goals in about **64 seconds** of simulation time. The settled positions measured in Gazebo were within **14 cm** of their targets.
 
+## Monitor LiDAR agreement with the map
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --base-paths src --packages-select aisleops_localization \
+  --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+source install/local_setup.bash
+ros2 launch launch/warehouse.launch.py map:=/path/to/warehouse.yaml scan_monitor:=true
+```
+
+In another sourced terminal, read the monitor output.
+
+```bash
+ros2 topic echo /aisleops/localization/scan_agreement diagnostic_msgs/msg/DiagnosticArray
+```
+
+The monitor uses TF at the scan timestamp to project finite LiDAR endpoints into the occupancy grid. An endpoint matches if an occupied cell center is within **0.18 m**. It reports the matched fraction of comparable endpoints alongside coverage of the finite returns. The default thresholds are 30 comparable endpoints, 0.55 coverage and 0.65 agreement. [LaserScan message](https://github.com/ros2/common_interfaces/blob/jazzy/sensor_msgs/msg/LaserScan.msg) · [OccupancyGrid message](https://github.com/ros2/common_interfaces/blob/jazzy/nav_msgs/msg/OccupancyGrid.msg)
+
+The diagnostic distinguishes `matching`, `low_agreement`, `insufficient_overlap` and stale inputs. A full nominal delivery mission reported **639/639** matching scans, with a minimum agreement of **0.9666**. In a separate test, shifting the monitor's reference map by 0.65 m on each axis gave a median agreement of **0.1413** across 10 scans. Similar aisle geometry can produce high agreement for several poses.
+
 ## Measure odometry error
 
 ```bash
