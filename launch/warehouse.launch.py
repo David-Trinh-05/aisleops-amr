@@ -87,6 +87,15 @@ def start(context):
         mappings={"ground_truth": str(ground_truth).lower()},
     ).toxml()
     gz_command = ["gz", "sim", "-r"]
+    seed = LaunchConfiguration("sim_seed").perform(context)
+    if seed:
+        try:
+            seed = int(seed)
+        except ValueError as error:
+            raise RuntimeError("sim_seed must be an integer between 0 and 2147483647") from error
+        if not 0 <= seed <= 2_147_483_647:
+            raise RuntimeError("sim_seed must be an integer between 0 and 2147483647")
+        gz_command += ["--seed", str(seed)]
     if not IfCondition(LaunchConfiguration("gui")).evaluate(context):
         gz_command += ["-s", "--headless-rendering"]
     gz_command.append(str(world_file))
@@ -174,6 +183,7 @@ def start(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("gui", default_value="false", description="Show the Gazebo GUI"),
+        DeclareLaunchArgument("sim_seed", default_value="", description="Gazebo random seed"),
         DeclareLaunchArgument("namespace", default_value="aisleops", description="ROS topic namespace"),
         DeclareLaunchArgument("slam", default_value="false", description="Build a map with SLAM Toolbox"),
         DeclareLaunchArgument("map", default_value="", description="Map YAML for AMCL and Nav2"),

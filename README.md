@@ -181,6 +181,14 @@ In a Gazebo trial with two additional static landmarks, the gate held zero for *
 
 A separate trial relocated the robot during both delivery and return within one mission. The gate reopened **2.63 s** and **2.26 s** after confirmed loss, respectively, and each leg completed once. A second relocation on the same receiving leg produced `NEEDS_HELP retry_limit`. Over two simulated seconds of injected commands, the gate published **40 zero commands** and measured body drift was **0.2 mm**.
 
+## Paired simulation comparison
+
+Pass `sim_seed:=17` to the warehouse launch to seed Gazebo. The trials pair a hold-only run and a recovery-enabled run using the same map, Gazebo seed, and planned relocation. The five cases cover a nominal mission, one relocation during receiving, one during delivery, a symmetric warehouse, and two relocations on the receiving leg. The second relocation is triggered only after a replacement goal starts.
+
+Delivery is scored against Gazebo ground truth at the reported arrival, within 0.25 m and 0.22 rad of the station. Completion applies the same check to all three stops. Detection, zero command, wheel settling and reopening delays use simulation time. The Jazzy AMCL particle filter seeds itself from wall time, so the pairing controls the planned inputs while AMCL and message scheduling can vary. [Nav2 Jazzy particle filter initialization](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_amcl/src/pf/pf.c#L43-L60)
+
+The single-seed pilot completed **5 valid pairs**. Hold-only completed **1 of 5** missions and recovery completed **3 of 5**. Recovery completed the nominal, receiving and delivery cases, and reported `NEEDS_HELP` for the symmetric and repeated-fault cases. Across nine relocations, the median delay to confirmed loss was **0.240 s** and the median delay from loss to a zero command was **0.012 s**. The three verified reopenings took **2.692–2.694 s** from confirmed loss. The pilot observed zero false stops or false resumes.
+
 ## Measure odometry error
 
 ```bash
