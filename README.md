@@ -17,6 +17,8 @@ ros2 launch launch/warehouse.launch.py gui:=true
 
 The default ROS namespace is `/aisleops`. Send motion commands on `/aisleops/cmd_vel` as `geometry_msgs/msg/TwistStamped`. The simulation publishes `scan`, `imu` and `odom` in the same namespace. [ROS–Gazebo bridge documentation](https://github.com/gazebosim/ros_gz/blob/jazzy/ros_gz_bridge/README.md)
 
+The warehouse launch defaults Gazebo Transport to loopback (`127.0.0.1`) so Gazebo, the spawn process and the ROS bridge can discover each other without relying on a network adapter. For an external `gz` command, export `GZ_IP=127.0.0.1` and use the same `GZ_PARTITION` value passed to the launch as `gz_partition:=<name>`. To run Gazebo Transport across hosts, set `GZ_IP` to the appropriate interface before launching. [Gazebo Transport environment variables](https://gazebosim.org/api/transport/13/envvars.html)
+
 ## Build and save a warehouse map
 
 ```bash
@@ -201,6 +203,8 @@ The benchmark completed **30 valid pairs (60 runs)** across Gazebo seeds 17, 23,
 Recovery increased the observed delivery rate by **36.7 percentage points** and mission completion by **26.7 points**. All **52 injected relocations** were detected. In both modes the median was **0.240 s** from relocation to confirmed loss, **0.012 s** from loss to zero command and **1.25 s** from relocation to wheel settling. The **18 verified reopenings** took a median **2.67 s** from confirmed loss (P95 **2.69 s**). At reopening the median AMCL position error was **1.87 cm** (P95 **4.59 cm**) and median yaw error was **0.59°** (P95 **1.47°**).
 
 The benchmark observed **0 false resumes in 18 reopenings** and false stops in **2/30 hold-only** and **6/30 recovery-enabled** runs. All eight false stops reported `localization_stale` without a matching relocation. This prevented injection of the first planned relocation in one hold-only run and the second relocation in one recovery-enabled run. All six symmetric trials with recovery reported `NEEDS_HELP ambiguous_pose`. The five recovery-enabled repeat trials that received both relocations reported `NEEDS_HELP retry_limit` after the second relocation.
+
+A follow-up with loopback transport repeated all five scenarios on seeds 53, 67 and 89. The same 30 trial slots had **eight `localization_stale` stops** in the original run and **zero** in the follow-up. Recovery completed **9/15** missions and hold-only completed **3/15**. One hold-only run timed out waiting for the Nav2 planner to acknowledge a goal before the relocation was injected.
 
 ## Measure odometry error
 

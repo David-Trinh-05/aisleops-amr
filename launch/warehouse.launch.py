@@ -10,7 +10,7 @@ from launch.actions import IncludeLaunchDescription, OpaqueFunction
 from launch.actions import SetEnvironmentVariable, Shutdown
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node, PushROSNamespace, SetRemap
 from launch_ros.descriptions import ParameterFile
 import xacro
@@ -208,5 +208,6 @@ def generate_launch_description():
             description="Gazebo Transport partition for this session",
         ),
         SetEnvironmentVariable("GZ_PARTITION", LaunchConfiguration("gz_partition")),
+        SetEnvironmentVariable("GZ_IP", EnvironmentVariable("GZ_IP", default_value="127.0.0.1")),
         OpaqueFunction(function=start),
     ])
