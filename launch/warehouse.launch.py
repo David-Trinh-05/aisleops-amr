@@ -64,9 +64,10 @@ def start(context):
     root = Path(__file__).resolve().parents[1]
     namespace = LaunchConfiguration("namespace").perform(context).strip("/")
     slam = IfCondition(LaunchConfiguration("slam")).evaluate(context)
-    guard_localization = IfCondition(LaunchConfiguration("guard_localization")).evaluate(context)
+    recover_localization = IfCondition(LaunchConfiguration("recover_localization")).evaluate(context)
+    guard_localization = recover_localization or IfCondition(LaunchConfiguration("guard_localization")).evaluate(context)
     scan_monitor = guard_localization or IfCondition(LaunchConfiguration("scan_monitor")).evaluate(context)
-    pose_search = IfCondition(LaunchConfiguration("pose_search")).evaluate(context)
+    pose_search = recover_localization or IfCondition(LaunchConfiguration("pose_search")).evaluate(context)
     map_yaml = LaunchConfiguration("map").perform(context)
     if slam and map_yaml:
         raise RuntimeError("Choose slam:=true for mapping or map:=<yaml> for AMCL navigation.")
@@ -76,6 +77,10 @@ def start(context):
         map_file = Path(map_yaml).expanduser().resolve()
         if not map_file.is_file():
             raise RuntimeError(f"Map YAML file does not exist: {map_file}")
+    world_sdf = LaunchConfiguration("world").perform(context)
+    world_file = Path(world_sdf).expanduser().resolve() if world_sdf else root / "worlds/warehouse.sdf"
+    if not world_file.is_file():
+        raise RuntimeError(f"Warehouse SDF file does not exist: {world_file}")
     ground_truth = IfCondition(LaunchConfiguration("ground_truth")).evaluate(context)
     description = xacro.process_file(
         str(root / "description/aisleops.urdf.xacro"),
@@ -84,7 +89,7 @@ def start(context):
     gz_command = ["gz", "sim", "-r"]
     if not IfCondition(LaunchConfiguration("gui")).evaluate(context):
         gz_command += ["-s", "--headless-rendering"]
-    gz_command.append(str(root / "worlds/warehouse.sdf"))
+    gz_command.append(str(world_file))
     actions = [
         ExecuteProcess(
             cmd=gz_command, output="screen",
@@ -152,7 +157,7 @@ def start(context):
         actions.append(Node(
             package="aisleops_mission", executable="localization_gate",
             namespace=namespace, output="screen",
-            parameters=[{"use_sim_time": True}],
+            parameters=[{"use_sim_time": True, "recover_localization": recover_localization}],
             remappings=[("/clock", "clock")],
             on_exit=Shutdown(reason="Localization velocity gate exited"),
         ))
@@ -172,11 +177,15 @@ def generate_launch_description():
         DeclareLaunchArgument("namespace", default_value="aisleops", description="ROS topic namespace"),
         DeclareLaunchArgument("slam", default_value="false", description="Build a map with SLAM Toolbox"),
         DeclareLaunchArgument("map", default_value="", description="Map YAML for AMCL and Nav2"),
+        DeclareLaunchArgument("world", default_value="", description="SDF with a world named warehouse"),
         DeclareLaunchArgument(
             "scan_monitor", default_value="false", description="Report LiDAR agreement with the map",
         ),
         DeclareLaunchArgument(
             "guard_localization", default_value="false", description="Hold motion if localization is lost",
+        ),
+        DeclareLaunchArgument(
+            "recover_localization", default_value="false", description="Verify a recovery pose while motion is held",
         ),
         DeclareLaunchArgument(
             "pose_search", default_value="false", description="Search the map for stationary LiDAR poses",

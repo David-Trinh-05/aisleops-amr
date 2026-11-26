@@ -66,9 +66,9 @@ A headless run reached the delivery bay in **20.35 s** of simulation time. The s
 Keep the saved-map Nav2 launch running. In another terminal, build and run the C++ mission client.
 
 ```bash
-sudo apt install python3-colcon-common-extensions
+sudo apt install python3-colcon-common-extensions ros-jazzy-rosidl-default-generators
 source /opt/ros/jazzy/setup.bash
-colcon build --base-paths src --packages-select aisleops_mission \
+colcon build --base-paths src --packages-up-to aisleops_mission \
   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
 source install/local_setup.bash
 ros2 run aisleops_mission delivery_mission --ros-args \
@@ -125,7 +125,7 @@ ros2 run aisleops_mission delivery_mission --ros-args \
   -p guard_localization:=true
 ```
 
-The launch places a velocity gate between Collision Monitor and the Gazebo bridge. It opens when scan health reaches `tracking`. Confirmed loss, unavailable localization, or 750 ms without a fresh health update latches `HOLD`. The gate sends zero velocity and the mission cancels its current goal. The pending leg is reported on `/aisleops/mission_status` and remains held until the session ends.
+The launch places a velocity gate between Collision Monitor and the Gazebo bridge. It opens when scan health reaches `tracking`. Confirmed loss, unavailable localization, or 750 ms without a fresh health update latches `HOLD`. The gate sends zero velocity and the mission cancels its current goal. In hold-only mode, the pending leg is reported on `/aisleops/mission_status` and remains held until the session ends.
 
 In a simulated relocation during the receiving leg, the first zero command followed the `lost` scan timestamp by **16 ms**. Nav2 confirmed cancellation. After settling, the gate sent **40 zero commands** during two more simulated seconds of injected nonzero input.
 
@@ -152,6 +152,30 @@ The service searches free positions and headings across the occupancy grid using
 | `UNAVAILABLE` (`4`) | The search needs a valid map, recent stationary scan, recent wheel odometry and a scan-to-base transform. |
 
 In a relocation trial, the two best fits differed by **0.0020** in score. The pose closest to Gazebo ground truth ranked second, within **6.1 cm** and **0.001 rad** of the true pose. The service returned `AMBIGUOUS` and the mission remained in `HOLD`. The response provides pose hypotheses for inspection while AMCL and the velocity gate retain control of localization and motion.
+
+## Recover localization and resume a delivery
+
+Build through `aisleops_mission` as above and source the workspace in both terminals. Enable recovery on the launch and on the mission client.
+
+```bash
+ros2 launch launch/warehouse.launch.py map:=/path/to/warehouse.yaml recover_localization:=true
+```
+
+```bash
+ros2 run aisleops_mission delivery_mission --ros-args \
+  -r __ns:=/aisleops -r /clock:=/aisleops/clock -p use_sim_time:=true \
+  -p recover_localization:=true
+```
+
+Watch `/aisleops/localization/gate_state` and `/aisleops/mission_status` with `ros2 topic echo`. After a localization fault, the gate holds zero velocity and the mission waits for its old Nav2 goal to reach a terminal state. It then requests recovery for the pending leg.
+
+1. Three distinct stationary scans must support a unique candidate within 0.20 m and 0.15 rad of the first. The gate seeds AMCL with the last candidate and requests filter updates while stationary. [Nav2 Jazzy AMCL initial pose and no-motion services](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_amcl/src/amcl_node.cpp#L1473-L1485)
+2. A fresh AMCL estimate must agree with the seed within 0.25 m and 0.20 rad with bounded covariance. The gate reports `READY` after five fresh matching scans following the verified estimate. `READY` authorizes a resume request while the evidence is fresh.
+3. Once the gate opens, the mission announces `RESUMED <leg>` and sends a new goal for that same leg. A leg gets one automatic retry. The gate rejects velocity messages stamped before it reopened.
+
+Ambiguous evidence, conflicting candidates or a recovery timeout put the gate in `NEEDS_HELP` and preserve zero velocity. The stock warehouse has symmetric geometry that can trigger this outcome. For a warehouse with distinct landmarks, `world:=/path/to/warehouse.sdf` accepts an SDF containing a world named `warehouse` with the standard robot spawn and matching saved map. The same option can be used when building that map with `slam:=true`.
+
+In a Gazebo trial with two additional static landmarks, the gate held zero for **52 commands** and reopened **2.58 s** after confirmed loss. The last verified AMCL pose before release was **3.0 cm** and **0.018 rad** from ground truth. The mission canceled the first receiving goal and then completed receiving, delivery and return in order. In the symmetric warehouse, recovery reported `NEEDS_HELP`, rejected a resume request and continued publishing zero velocity under injected motion commands.
 
 ## Measure odometry error
 

@@ -49,7 +49,8 @@ public:
     lifecycle_(node_->create_client<Trigger>("lifecycle_manager_nav2/is_active")),
     status_(node_->create_publisher<std_msgs::msg::String>(
         "mission_status", rclcpp::QoS(10).transient_local())),
-    guarded_(node_->declare_parameter<bool>("guard_localization", false))
+    recovery_enabled_(node_->declare_parameter<bool>("recover_localization", false)),
+    guarded_(node_->declare_parameter<bool>("guard_localization", false) || recovery_enabled_)
   {
     odom_subscription_ = node_->create_subscription<Odometry>(
       "odom", rclcpp::SensorDataQoS(),
@@ -58,6 +59,10 @@ public:
       gate_subscription_ = node_->create_subscription<std_msgs::msg::String>(
         "localization/gate_state", rclcpp::QoS(1).transient_local(),
         [this](const std_msgs::msg::String & message) {observe_gate(message.data);});
+    }
+    if (recovery_enabled_) {
+      recover_ = node_->create_client<Trigger>("localization/recover");
+      resume_ = node_->create_client<Trigger>("localization/resume");
     }
     executor_.add_node(node_);
   }
@@ -75,18 +80,25 @@ public:
     }
     if (!wait_for_nav2()) {
       if (hold_reason_) {
-        return hold(route.front().name);
+        return hold(route.front().name, false);
       }
       return fail("Nav2 or the localization gate did not become ready with a running clock");
     }
     gate_armed_ = guarded_;
     for (const auto & leg : route) {
-      executor_.spin_some();
-      if (interrupted() || !run_leg(leg, std::chrono::seconds(timeout))) {
-        if (hold_reason_) {
-          return hold(leg.name);
+      bool recovered = false;
+      while (true) {
+        executor_.spin_some();
+        if (!interrupted() && run_leg(leg, std::chrono::seconds(timeout))) {
+          break;
         }
-        return fail("Mission halted at " + leg.name);
+        if (!hold_reason_) {
+          return fail("Mission halted at " + leg.name);
+        }
+        if (!hold(leg.name, !recovered)) {
+          return false;
+        }
+        recovered = true;
       }
     }
     announce("COMPLETED");
@@ -97,11 +109,11 @@ private:
   void observe_gate(const std::string & state)
   {
     gate_received_ = SteadyClock::now();
-    gate_open_ = state == "OPEN";
+    gate_state_ = state;
     if (!hold_reason_) {
       if (state.rfind("HOLD ", 0) == 0) {
         hold_reason_ = state.substr(5);
-      } else if (gate_armed_ && !gate_open_) {
+      } else if (gate_armed_ && state != "OPEN") {
         hold_reason_ = "gate_closed";
       }
     }
@@ -109,7 +121,7 @@ private:
 
   bool gate_ready() const
   {
-    return !guarded_ || (gate_open_ && SteadyClock::now() - gate_received_ < 500ms);
+    return !guarded_ || (gate_state_ == "OPEN" && SteadyClock::now() - gate_received_ < 500ms);
   }
 
   bool interrupted()
@@ -120,15 +132,62 @@ private:
     return stop_requested || hold_reason_.has_value();
   }
 
-  bool hold(const std::string & leg)
+  bool hold(const std::string & leg, bool can_retry)
   {
     announce("HOLD " + leg);
     RCLCPP_WARN(node_->get_logger(), "Pending leg %s held (%s)", leg.c_str(), hold_reason_->c_str());
+    if (recovery_enabled_ && !stop_requested) {
+      const std::string failure = !can_retry ? "retry_limit" :
+        !goal_terminal_ ? "goal_terminal_unconfirmed" : recover_leg(leg);
+      if (failure.empty()) {
+        hold_reason_.reset();
+        announce("RESUMED " + leg);
+        return true;
+      }
+      announce("NEEDS_HELP " + leg + " " + failure);
+    }
     while (rclcpp::ok() && !stop_requested) {
       executor_.spin_some();
       std::this_thread::sleep_for(50ms);
     }
     return false;
+  }
+
+  bool trigger(const rclcpp::Client<Trigger>::SharedPtr & client)
+  {
+    if (stop_requested || !client->service_is_ready()) {
+      return false;
+    }
+    auto reply = client->async_send_request(std::make_shared<Trigger::Request>());
+    if (!await(reply, SteadyClock::now() + 2s, false)) {
+      client->remove_pending_request(reply);
+      return false;
+    }
+    return reply.get()->success;
+  }
+
+  std::string recover_leg(const std::string & leg)
+  {
+    if (!trigger(recover_)) {
+      return "recovery_start_failed";
+    }
+    announce("RECOVERING " + leg);
+    const auto deadline = SteadyClock::now() + 14s;
+    bool released = false;
+    while (rclcpp::ok() && !stop_requested && SteadyClock::now() < deadline) {
+      executor_.spin_some();
+      if (gate_state_.rfind("NEEDS_HELP ", 0) == 0) {
+        return gate_state_.substr(11);
+      }
+      if (!released && gate_state_ == "READY" && SteadyClock::now() - gate_received_ < 500ms) {
+        released = trigger(resume_);
+      }
+      if (released && gate_ready() && !stop_requested) {
+        return {};
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    return stop_requested ? "interrupted" : "recovery_timeout";
   }
 
   Leg load_leg(const std::string & name, const std::vector<double> & defaults)
@@ -208,6 +267,7 @@ private:
     goal.pose.pose.orientation.z = std::sin(leg.pose[2] / 2);
     goal.pose.pose.orientation.w = std::cos(leg.pose[2] / 2);
 
+    goal_terminal_ = false;
     auto accepted = navigator_->async_send_goal(goal);
     // Keep receiving the reply after an interrupt so an accepted goal can still be canceled.
     if (!await(accepted, SteadyClock::now() + 5s, false)) {
@@ -216,6 +276,7 @@ private:
     }
     const auto handle = accepted.get();
     if (!handle) {
+      goal_terminal_ = true;
       RCLCPP_ERROR(node_->get_logger(), "Goal rejected for %s", leg.name.c_str());
       return false;
     }
@@ -226,10 +287,11 @@ private:
         node_->get_logger(), "%s at %s. Canceling the current goal.",
         hold_reason_ ? hold_reason_->c_str() : (stop_requested ? "Interrupted" : "Deadline expired"),
         leg.name.c_str());
-      cancel(handle, result);
+      goal_terminal_ = cancel(handle, result);
       return false;
     }
     const auto outcome = result.get();
+    goal_terminal_ = outcome.code != rclcpp_action::ResultCode::UNKNOWN;
     if (outcome.code != rclcpp_action::ResultCode::SUCCEEDED ||
       !outcome.result || outcome.result->error_code != Navigate::Result::NONE)
     {
@@ -246,10 +308,10 @@ private:
     return true;
   }
 
-  void cancel(const GoalHandle::SharedPtr & handle, std::shared_future<GoalHandle::WrappedResult> & result)
+  bool cancel(const GoalHandle::SharedPtr & handle, std::shared_future<GoalHandle::WrappedResult> & result)
   {
     if (result.wait_for(0s) == std::future_status::ready) {
-      return;
+      return result.get().code != rclcpp_action::ResultCode::UNKNOWN;
     }
     auto cancellation = navigator_->async_cancel_goal(handle);
     if (await(cancellation, SteadyClock::now() + 3s, false) &&
@@ -262,9 +324,10 @@ private:
       RCLCPP_INFO(
         node_->get_logger(), "Goal terminal result after cancellation: %d",
         static_cast<int>(outcome.code));
-    } else {
-      RCLCPP_ERROR(node_->get_logger(), "Nav2 did not report a terminal result");
+      return outcome.code != rclcpp_action::ResultCode::UNKNOWN;
     }
+    RCLCPP_ERROR(node_->get_logger(), "Nav2 did not report a terminal result");
+    return false;
   }
 
   bool wait_until_stopped()
@@ -306,11 +369,14 @@ private:
   rclcpp_action::Client<Navigate>::SharedPtr navigator_;
   rclcpp::Client<Trigger>::SharedPtr lifecycle_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_;
+  const bool recovery_enabled_;
   const bool guarded_;
   bool gate_armed_{false};
-  bool gate_open_{false};
+  bool goal_terminal_{true};
+  std::string gate_state_;
   SteadyClock::time_point gate_received_{};
   std::optional<std::string> hold_reason_;
+  rclcpp::Client<Trigger>::SharedPtr recover_, resume_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr gate_subscription_;
   rclcpp::Subscription<Odometry>::SharedPtr odom_subscription_;
   Odometry::ConstSharedPtr odometry_;
