@@ -13,7 +13,17 @@ tar -xzf demo/recovery-bag.tar.gz
 
 ## Run from a clone
 
-Use the ROS 2 Jazzy and Gazebo Harmonic dependencies in the [project README](../README.md). Run from the repository root. Source `/opt/ros/jazzy/setup.bash` in each terminal.
+Use Ubuntu 24.04 with the ROS 2 Jazzy apt repository configured. Install the build tools, Gazebo Harmonic integration, Nav2, RViz and rosbag MCAP support. [ROS 2 Jazzy Ubuntu installation](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
+
+```bash
+sudo apt install build-essential python3-colcon-common-extensions \
+  ros-jazzy-ros-base ros-jazzy-rosidl-default-generators \
+  ros-jazzy-ros-gz ros-jazzy-xacro \
+  ros-jazzy-navigation2 ros-jazzy-nav2-common ros-jazzy-rviz2 \
+  ros-jazzy-rosbag2-storage-mcap
+```
+
+Run from the repository root. Source `/opt/ros/jazzy/setup.bash` in each terminal.
 
 ```bash
 source /opt/ros/jazzy/setup.bash

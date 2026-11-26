@@ -1,8 +1,12 @@
 # AisleOps AMR
 
-A ROS 2 simulation for evaluating an autonomous mobile robot in a warehouse. It includes a custom differential-drive robot, 2D LiDAR and IMU, a three-leg Nav2 delivery mission, and an evaluation tool that measures wheel odometry against Gazebo ground truth.
+A warehouse AMR simulation built with ROS 2 Jazzy, Nav2 and Gazebo Harmonic. The robot uses 2D LiDAR to detect localization loss and stop. It resumes the interrupted delivery leg once it verifies a new pose, or reports `NEEDS_HELP` and stays stopped when recovery cannot be verified.
 
-[Watch the recovery demo](demo/recovery.mp4) · [Run it from a clone and inspect the recorded bag](demo/README.md)
+[Run the recovery demo](demo/README.md#run-from-a-clone) · [Watch the recording](demo/recovery.mp4) · [Inspect the benchmark](#paired-simulation-comparison)
+
+Across 30 paired simulation trials, the robot completed **13/30 missions with recovery enabled** and **5/30 with hold-only behavior**. [Trial data](benchmarks/recovery/runs.csv)
+
+![Gazebo warehouse and RViz showing the robot and its planned path on the delivery leg after recovery](demo/recovery-preview.jpg)
 
 ## Run the warehouse simulation
 
@@ -192,6 +196,8 @@ Pass `sim_seed:=17` to the warehouse launch to seed Gazebo. The trials pair a ho
 Delivery is scored against Gazebo ground truth at the reported arrival, within 0.25 m and 0.22 rad of the station. Completion applies the same check to all three stops. Detection, zero command, wheel settling and reopening delays use simulation time. The Jazzy AMCL particle filter seeds itself from wall time, so the pairing controls the planned inputs while AMCL and message scheduling can vary. [Nav2 Jazzy particle filter initialization](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_amcl/src/pf/pf.c#L43-L60)
 
 The benchmark completed **30 valid pairs (60 runs)** across Gazebo seeds 17, 23, 41, 53, 67 and 89.
+
+The run-level CSV records delivery, full mission completion and fault counts for each scenario, seed and mode. The relocation-level CSV records each injected fault and the measured detection, stop and recovery times. Timestamps ending in `_ns` use simulation time in nanoseconds. A blank timing cell marks an event without a recorded measurement. [Runs CSV](benchmarks/recovery/runs.csv) · [Injected faults CSV](benchmarks/recovery/faults.csv)
 
 | Scenario | Hold-only delivered | Recovery delivered | Hold-only completed | Recovery completed |
 | --- | ---: | ---: | ---: | ---: |
