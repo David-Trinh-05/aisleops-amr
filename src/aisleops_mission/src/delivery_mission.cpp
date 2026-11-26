@@ -47,11 +47,18 @@ public:
   : node_(node),
     navigator_(rclcpp_action::create_client<Navigate>(node_, "navigate_to_pose")),
     lifecycle_(node_->create_client<Trigger>("lifecycle_manager_nav2/is_active")),
-    status_(node_->create_publisher<std_msgs::msg::String>("mission_status", 10))
+    status_(node_->create_publisher<std_msgs::msg::String>(
+        "mission_status", rclcpp::QoS(10).transient_local())),
+    guarded_(node_->declare_parameter<bool>("guard_localization", false))
   {
     odom_subscription_ = node_->create_subscription<Odometry>(
       "odom", rclcpp::SensorDataQoS(),
       [this](Odometry::ConstSharedPtr message) {odometry_ = message;});
+    if (guarded_) {
+      gate_subscription_ = node_->create_subscription<std_msgs::msg::String>(
+        "localization/gate_state", rclcpp::QoS(1).transient_local(),
+        [this](const std_msgs::msg::String & message) {observe_gate(message.data);});
+    }
     executor_.add_node(node_);
   }
 
@@ -67,10 +74,18 @@ public:
       throw std::invalid_argument("leg_timeout_sec must be positive");
     }
     if (!wait_for_nav2()) {
-      return fail("Nav2 did not become active with a running simulation clock");
+      if (hold_reason_) {
+        return hold(route.front().name);
+      }
+      return fail("Nav2 or the localization gate did not become ready with a running clock");
     }
+    gate_armed_ = guarded_;
     for (const auto & leg : route) {
-      if (stop_requested || !run_leg(leg, std::chrono::seconds(timeout))) {
+      executor_.spin_some();
+      if (interrupted() || !run_leg(leg, std::chrono::seconds(timeout))) {
+        if (hold_reason_) {
+          return hold(leg.name);
+        }
         return fail("Mission halted at " + leg.name);
       }
     }
@@ -79,6 +94,43 @@ public:
   }
 
 private:
+  void observe_gate(const std::string & state)
+  {
+    gate_received_ = SteadyClock::now();
+    gate_open_ = state == "OPEN";
+    if (!hold_reason_) {
+      if (state.rfind("HOLD ", 0) == 0) {
+        hold_reason_ = state.substr(5);
+      } else if (gate_armed_ && !gate_open_) {
+        hold_reason_ = "gate_closed";
+      }
+    }
+  }
+
+  bool gate_ready() const
+  {
+    return !guarded_ || (gate_open_ && SteadyClock::now() - gate_received_ < 500ms);
+  }
+
+  bool interrupted()
+  {
+    if (gate_armed_ && !hold_reason_ && !gate_ready()) {
+      hold_reason_ = "gate_status_timeout";
+    }
+    return stop_requested || hold_reason_.has_value();
+  }
+
+  bool hold(const std::string & leg)
+  {
+    announce("HOLD " + leg);
+    RCLCPP_WARN(node_->get_logger(), "Pending leg %s held (%s)", leg.c_str(), hold_reason_->c_str());
+    while (rclcpp::ok() && !stop_requested) {
+      executor_.spin_some();
+      std::this_thread::sleep_for(50ms);
+    }
+    return false;
+  }
+
   Leg load_leg(const std::string & name, const std::vector<double> & defaults)
   {
     auto pose = node_->declare_parameter<std::vector<double>>(name + "_pose", defaults);
@@ -112,7 +164,7 @@ private:
         return true;
       }
       const auto remaining = deadline - SteadyClock::now();
-      if (remaining <= 0s || (allow_interrupt && stop_requested)) {
+      if (remaining <= 0s || (allow_interrupt && interrupted())) {
         return false;
       }
       const auto interval = std::min(remaining, SteadyClock::duration(100ms));
@@ -126,9 +178,10 @@ private:
   bool wait_for_nav2()
   {
     const auto deadline = SteadyClock::now() + 35s;
-    while (rclcpp::ok() && !stop_requested && SteadyClock::now() < deadline) {
+    while (rclcpp::ok() && !interrupted() && SteadyClock::now() < deadline) {
       executor_.spin_some();
-      if (node_->get_clock()->ros_time_is_active() && node_->now().nanoseconds() > 0 &&
+      if (!interrupted() && gate_ready() &&
+        node_->get_clock()->ros_time_is_active() && node_->now().nanoseconds() > 0 &&
         odometry_ && navigator_->action_server_is_ready() && lifecycle_->service_is_ready())
       {
         auto response = lifecycle_->async_send_request(std::make_shared<Trigger::Request>());
@@ -136,7 +189,7 @@ private:
           lifecycle_->remove_pending_request(response);
           return false;
         }
-        if (response.get()->success) {
+        if (response.get()->success && gate_ready() && !interrupted()) {
           return true;
         }
       }
@@ -168,10 +221,11 @@ private:
     }
     announce("STARTED " + leg.name);
     auto result = navigator_->async_get_result(handle);
-    if (!await(result, SteadyClock::now() + timeout)) {
+    if (interrupted() || !await(result, SteadyClock::now() + timeout)) {
       RCLCPP_WARN(
         node_->get_logger(), "%s at %s. Canceling the current goal.",
-        stop_requested ? "Interrupted" : "Deadline expired", leg.name.c_str());
+        hold_reason_ ? hold_reason_->c_str() : (stop_requested ? "Interrupted" : "Deadline expired"),
+        leg.name.c_str());
       cancel(handle, result);
       return false;
     }
@@ -185,7 +239,7 @@ private:
         outcome.result ? outcome.result->error_code : -1);
       return false;
     }
-    if (!wait_until_stopped()) {
+    if (!wait_until_stopped() || interrupted()) {
       return false;
     }
     announce("REACHED " + leg.name);
@@ -218,8 +272,11 @@ private:
     const auto after_result = node_->now();
     const auto deadline = SteadyClock::now() + 6s;
     std::optional<rclcpp::Time> stopped_since;
-    while (rclcpp::ok() && !stop_requested && SteadyClock::now() < deadline) {
+    while (rclcpp::ok() && !interrupted() && SteadyClock::now() < deadline) {
       executor_.spin_some();
+      if (interrupted()) {
+        return false;
+      }
       if (odometry_) {
         const auto stamp = rclcpp::Time(odometry_->header.stamp);
         const auto age = (node_->now() - stamp).seconds();
@@ -249,6 +306,12 @@ private:
   rclcpp_action::Client<Navigate>::SharedPtr navigator_;
   rclcpp::Client<Trigger>::SharedPtr lifecycle_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_;
+  const bool guarded_;
+  bool gate_armed_{false};
+  bool gate_open_{false};
+  SteadyClock::time_point gate_received_{};
+  std::optional<std::string> hold_reason_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr gate_subscription_;
   rclcpp::Subscription<Odometry>::SharedPtr odom_subscription_;
   Odometry::ConstSharedPtr odometry_;
 };

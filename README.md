@@ -111,6 +111,24 @@ The same diagnostic carries a `health_state` for consumers that need evidence ac
 
 In one simulation experiment, Gazebo relocated the robot body by **5.11 m** during the receiving leg. Wheel odometry changed **1.2 cm** over the same 20 ms interval. The monitor reported `lost` after **0.20 s** of simulation time.
 
+## Hold motion after localization loss
+
+Build `aisleops_mission` and `aisleops_localization` in the same ROS workspace. Pass `guard_localization:=true` to both the warehouse launch and the delivery mission.
+
+```bash
+ros2 launch launch/warehouse.launch.py map:=/path/to/warehouse.yaml guard_localization:=true
+```
+
+```bash
+ros2 run aisleops_mission delivery_mission --ros-args \
+  -r __ns:=/aisleops -r /clock:=/aisleops/clock -p use_sim_time:=true \
+  -p guard_localization:=true
+```
+
+The launch places a velocity gate between Collision Monitor and the Gazebo bridge. It opens when scan health reaches `tracking`. Confirmed loss, unavailable localization, or 750 ms without a fresh health update latches `HOLD`. The gate sends zero velocity and the mission cancels its current goal. The pending leg is reported on `/aisleops/mission_status` and remains held until the session ends.
+
+In a simulated relocation during the receiving leg, the first zero command followed the `lost` scan timestamp by **16 ms**. Nav2 confirmed cancellation. After settling, the gate sent **40 zero commands** during two more simulated seconds of injected nonzero input.
+
 ## Measure odometry error
 
 ```bash

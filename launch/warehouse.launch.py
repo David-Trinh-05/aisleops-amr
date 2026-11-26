@@ -21,7 +21,7 @@ def spawn_finished(event, context):
         raise RuntimeError(f"Warehouse robot spawn failed with exit code {event.returncode}")
 
 
-def navigation_nodes(root, namespace, map_file):
+def navigation_nodes(root, namespace, map_file, guard_localization):
     from nav2_common.launch import RewrittenYaml
 
     config = ParameterFile(RewrittenYaml(
@@ -32,6 +32,7 @@ def navigation_nodes(root, namespace, map_file):
     prefix = f"/{namespace}" if namespace else ""
     remaps = [(f"/{topic}", f"{prefix}/{topic}") for topic in ("clock", "tf", "tf_static")]
     velocity_remap = [("cmd_vel", "cmd_vel_nav")]
+    collision_remap = [("cmd_vel", "cmd_vel_guard_in")] if guard_localization else []
     specs = [
         ("nav2_map_server", "map_server", {"yaml_filename": str(map_file)}, []),
         ("nav2_amcl", "amcl", {}, []),
@@ -39,7 +40,7 @@ def navigation_nodes(root, namespace, map_file):
         ("nav2_planner", "planner_server", {}, [("map", f"{prefix}/map")]),
         ("nav2_behaviors", "behavior_server", {}, velocity_remap),
         ("nav2_velocity_smoother", "velocity_smoother", {}, velocity_remap),
-        ("nav2_collision_monitor", "collision_monitor", {}, []),
+        ("nav2_collision_monitor", "collision_monitor", {}, collision_remap),
         ("nav2_bt_navigator", "bt_navigator", {}, []),
     ]
     nodes = [
@@ -63,12 +64,13 @@ def start(context):
     root = Path(__file__).resolve().parents[1]
     namespace = LaunchConfiguration("namespace").perform(context).strip("/")
     slam = IfCondition(LaunchConfiguration("slam")).evaluate(context)
-    scan_monitor = IfCondition(LaunchConfiguration("scan_monitor")).evaluate(context)
+    guard_localization = IfCondition(LaunchConfiguration("guard_localization")).evaluate(context)
+    scan_monitor = guard_localization or IfCondition(LaunchConfiguration("scan_monitor")).evaluate(context)
     map_yaml = LaunchConfiguration("map").perform(context)
     if slam and map_yaml:
         raise RuntimeError("Choose slam:=true for mapping or map:=<yaml> for AMCL navigation.")
     if scan_monitor and not map_yaml:
-        raise RuntimeError("scan_monitor:=true requires a saved map passed with map:=<yaml>.")
+        raise RuntimeError("Scan monitoring and localization guarding require map:=<yaml>.")
     if map_yaml:
         map_file = Path(map_yaml).expanduser().resolve()
         if not map_file.is_file():
@@ -106,6 +108,7 @@ def start(context):
             package="ros_gz_bridge", executable="parameter_bridge",
             namespace=namespace, output="screen",
             parameters=[{"config_file": str(root / "config/warehouse_bridge.yaml")}],
+            remappings=[("cmd_vel", "cmd_vel_guarded")] if guard_localization else [],
             on_exit=Shutdown(reason="ROS–Gazebo bridge exited"),
         ),
     ]
@@ -136,13 +139,21 @@ def start(context):
             ])
         )
     if map_yaml:
-        actions.extend(navigation_nodes(root, namespace, map_file))
+        actions.extend(navigation_nodes(root, namespace, map_file, guard_localization))
     if scan_monitor:
         actions.append(Node(
             package="aisleops_localization", executable="scan_map_monitor",
             namespace=namespace, output="screen",
             parameters=[{"use_sim_time": True}],
             remappings=[("/clock", "clock"), ("/tf", "tf"), ("/tf_static", "tf_static")],
+        ))
+    if guard_localization:
+        actions.append(Node(
+            package="aisleops_mission", executable="localization_gate",
+            namespace=namespace, output="screen",
+            parameters=[{"use_sim_time": True}],
+            remappings=[("/clock", "clock")],
+            on_exit=Shutdown(reason="Localization velocity gate exited"),
         ))
     return actions
 
@@ -155,6 +166,9 @@ def generate_launch_description():
         DeclareLaunchArgument("map", default_value="", description="Map YAML for AMCL and Nav2"),
         DeclareLaunchArgument(
             "scan_monitor", default_value="false", description="Report LiDAR agreement with the map",
+        ),
+        DeclareLaunchArgument(
+            "guard_localization", default_value="false", description="Hold motion if localization is lost",
         ),
         DeclareLaunchArgument(
             "ground_truth", default_value="false", description="Publish pose for evaluation",
