@@ -6,6 +6,7 @@
   <maintainer email="sup@example.com">AisleOps AMR</maintainer>
   <license>UNLICENSED</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>aisleops_localization</depend>
   <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav2_msgs</depend>
