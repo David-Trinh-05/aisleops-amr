@@ -2,6 +2,8 @@
 
 A ROS 2 simulation for evaluating an autonomous mobile robot in a warehouse. It includes a custom differential-drive robot, 2D LiDAR and IMU, a three-leg Nav2 delivery mission, and an evaluation tool that measures wheel odometry against Gazebo ground truth.
 
+[Watch the recovery demo](demo/recovery.mp4) · [Run it from a clone and inspect the recorded bag](demo/README.md)
+
 ## Run the warehouse simulation
 
 The custom differential-drive AMR uses a Xacro description with a 0.48 × 0.34 m chassis, 0.410 m between wheel centers, 2D LiDAR and IMU. The 14 × 10 m warehouse has two shelf rows and marked receiving and delivery bays. All geometry is local. [Gazebo URDF spawning](https://gazebosim.org/docs/harmonic/spawn_urdf/) · [DiffDrive system](https://gazebosim.org/api/sim/8/classgz_1_1sim_1_1systems_1_1DiffDrive.html)
