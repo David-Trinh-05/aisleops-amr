@@ -1,0 +1,42 @@
+Panels: []
+Visualization Manager:
+  Global Options:
+    Fixed Frame: map
+  Displays:
+    - Class: rviz_default_plugins/Map
+      Name: Warehouse
+      Enabled: true
+      Topic:
+        Value: /aisleops/map
+        Durability Policy: Transient Local
+    - Class: rviz_default_plugins/LaserScan
+      Name: LiDAR
+      Enabled: true
+      Topic:
+        Value: /aisleops/scan
+        Reliability Policy: Best Effort
+      Color Transformer: FlatColor
+      Color: 0; 155; 255
+      Size (m): 0.08
+    - Class: rviz_default_plugins/Path
+      Name: Route
+      Enabled: true
+      Topic:
+        Value: /aisleops/plan
+    - Class: rviz_default_plugins/RobotModel
+      Name: AMR
+      Enabled: true
+      Description Topic:
+        Value: /aisleops/robot_description
+        Durability Policy: Transient Local
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Scale: 48
+      X: 4.5
+      Y: 0
+Window Geometry:
+  Width: 900
+  Height: 650
+  X: 0
+  Y: 0
