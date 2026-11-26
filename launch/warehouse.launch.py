@@ -66,11 +66,12 @@ def start(context):
     slam = IfCondition(LaunchConfiguration("slam")).evaluate(context)
     guard_localization = IfCondition(LaunchConfiguration("guard_localization")).evaluate(context)
     scan_monitor = guard_localization or IfCondition(LaunchConfiguration("scan_monitor")).evaluate(context)
+    pose_search = IfCondition(LaunchConfiguration("pose_search")).evaluate(context)
     map_yaml = LaunchConfiguration("map").perform(context)
     if slam and map_yaml:
         raise RuntimeError("Choose slam:=true for mapping or map:=<yaml> for AMCL navigation.")
-    if scan_monitor and not map_yaml:
-        raise RuntimeError("Scan monitoring and localization guarding require map:=<yaml>.")
+    if (scan_monitor or pose_search) and not map_yaml:
+        raise RuntimeError("Scan monitoring, localization guarding and pose search require map:=<yaml>.")
     if map_yaml:
         map_file = Path(map_yaml).expanduser().resolve()
         if not map_file.is_file():
@@ -155,6 +156,13 @@ def start(context):
             remappings=[("/clock", "clock")],
             on_exit=Shutdown(reason="Localization velocity gate exited"),
         ))
+    if pose_search:
+        actions.append(Node(
+            package="aisleops_localization", executable="scan_pose_search",
+            namespace=namespace, output="screen",
+            parameters=[{"use_sim_time": True}],
+            remappings=[("/clock", "clock"), ("/tf", "tf"), ("/tf_static", "tf_static")],
+        ))
     return actions
 
 
@@ -169,6 +177,9 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "guard_localization", default_value="false", description="Hold motion if localization is lost",
+        ),
+        DeclareLaunchArgument(
+            "pose_search", default_value="false", description="Search the map for stationary LiDAR poses",
         ),
         DeclareLaunchArgument(
             "ground_truth", default_value="false", description="Publish pose for evaluation",

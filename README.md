@@ -129,6 +129,30 @@ The launch places a velocity gate between Collision Monitor and the Gazebo bridg
 
 In a simulated relocation during the receiving leg, the first zero command followed the `lost` scan timestamp by **16 ms**. Nav2 confirmed cancellation. After settling, the gate sent **40 zero commands** during two more simulated seconds of injected nonzero input.
 
+## Search for localization candidates
+
+Build `aisleops_localization` and `aisleops_mission` with the ROS 2 Jazzy interface generators installed (`ros-jazzy-rosidl-default-generators`). Launch against a saved map, then call the service once the robot has settled.
+
+```bash
+ros2 launch launch/warehouse.launch.py map:=/path/to/warehouse.yaml \
+  guard_localization:=true pose_search:=true
+```
+
+```bash
+ros2 service call /aisleops/localization/search_pose aisleops_localization/srv/SearchPose '{}'
+```
+
+The service searches free positions and headings across the occupancy grid using a single recent, stationary LiDAR scan. It uses the sensor mounting transform and wheel velocity, so it can run independently of the current global pose estimate. It returns up to five distinct poses in the `map` frame at the scan timestamp, with scores in descending order. The scores measure how closely the projected LiDAR endpoints align with occupied cells. The search supports maps up to 30 m per side and 500,000 cells at 0.02–0.20 m per cell.
+
+| Status | Meaning |
+| --- | --- |
+| `CANDIDATE` (`1`) | The top score is at least 0.60 and leads the next distinct pose by at least 0.06, or is the only result. |
+| `AMBIGUOUS` (`2`) | The top score clears 0.60 and two distinct poses are within 0.06 of each other. |
+| `NO_MATCH` (`3`) | Too few valid returns or the search found no pose scoring at least 0.60. |
+| `UNAVAILABLE` (`4`) | The search needs a valid map, recent stationary scan, recent wheel odometry and a scan-to-base transform. |
+
+In a relocation trial, the two best fits differed by **0.0020** in score. The pose closest to Gazebo ground truth ranked second, within **6.1 cm** and **0.001 rad** of the true pose. The service returned `AMBIGUOUS` and the mission remained in `HOLD`. The response provides pose hypotheses for inspection while AMCL and the velocity gate retain control of localization and motion.
+
 ## Measure odometry error
 
 ```bash

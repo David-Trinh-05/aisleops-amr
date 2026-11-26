@@ -21,6 +21,7 @@
 #include <tf2_ros/transform_listener.hpp>
 
 #include "scan_health.hpp"
+#include "scan_geometry.hpp"
 
 namespace
 {
@@ -55,15 +56,6 @@ struct Counts
 bool unit_interval(double value)
 {
   return value > 0.0 && value <= 1.0;
-}
-
-bool valid_origin(const geometry_msgs::msg::Pose & pose)
-{
-  const auto & p = pose.position;
-  const auto & q = pose.orientation;
-  const double norm2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
-  return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) &&
-         std::abs(norm2 - 1.0) < 1e-3;
 }
 
 Endpoint classify(const Grid & map, double x, double y, double radius, int occupied_threshold)
@@ -149,14 +141,7 @@ private:
   {
     health_.unavailable();
     const auto & info = map->info;
-    if (map->header.frame_id != map_frame_ || info.width == 0 || info.height == 0 ||
-      !(std::isfinite(info.resolution) && info.resolution > 0.0) ||
-      map->data.size() != static_cast<std::size_t>(info.width) * info.height ||
-      !valid_origin(info.origin) ||
-      !std::all_of(map->data.begin(), map->data.end(), [](int value) {
-        return value >= -1 && value <= 100;
-      }))
-    {
+    if (!aisleops::valid_grid(*map, map_frame_)) {
       map_.reset();
       map_status_ = "invalid_map";
       report(Status::STALE, map_status_, now());
@@ -174,14 +159,7 @@ private:
     if (!map_) {
       return;
     }
-    if (scan->header.frame_id.empty() || scan->header.stamp.sec < 0 ||
-      scan->header.stamp.nanosec >= 1'000'000'000 ||
-      (scan->header.stamp.sec == 0 && scan->header.stamp.nanosec == 0) ||
-      !std::isfinite(scan->angle_min) || !std::isfinite(scan->angle_increment) ||
-      scan->angle_increment == 0.0f || !std::isfinite(scan->range_min) ||
-      !std::isfinite(scan->range_max) || scan->range_min < 0.0f ||
-      scan->range_max <= scan->range_min)
-    {
+    if (!aisleops::valid_scan(*scan)) {
       last_evaluated_ = last_received_;
       report_unavailable(Status::STALE, "invalid_scan", now());
       return;
@@ -214,7 +192,7 @@ private:
     Counts counts;
     for (std::size_t index = 0; index < scan.ranges.size(); ++index) {
       const double range = scan.ranges[index];
-      if (!std::isfinite(range) || range < scan.range_min || range >= scan.range_max) {
+      if (!aisleops::valid_return(scan, scan.ranges[index])) {
         continue;
       }
       ++counts.returns;
