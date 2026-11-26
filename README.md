@@ -187,7 +187,20 @@ Pass `sim_seed:=17` to the warehouse launch to seed Gazebo. The trials pair a ho
 
 Delivery is scored against Gazebo ground truth at the reported arrival, within 0.25 m and 0.22 rad of the station. Completion applies the same check to all three stops. Detection, zero command, wheel settling and reopening delays use simulation time. The Jazzy AMCL particle filter seeds itself from wall time, so the pairing controls the planned inputs while AMCL and message scheduling can vary. [Nav2 Jazzy particle filter initialization](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_amcl/src/pf/pf.c#L43-L60)
 
-The single-seed pilot completed **5 valid pairs**. Hold-only completed **1 of 5** missions and recovery completed **3 of 5**. Recovery completed the nominal, receiving and delivery cases, and reported `NEEDS_HELP` for the symmetric and repeated-fault cases. Across nine relocations, the median delay to confirmed loss was **0.240 s** and the median delay from loss to a zero command was **0.012 s**. The three verified reopenings took **2.692–2.694 s** from confirmed loss. The pilot observed zero false stops or false resumes.
+The benchmark completed **30 valid pairs (60 runs)** across Gazebo seeds 17, 23, 41, 53, 67 and 89.
+
+| Scenario | Hold-only delivered | Recovery delivered | Hold-only completed | Recovery completed |
+| --- | ---: | ---: | ---: | ---: |
+| Nominal | 5/6 | 6/6 | 5/6 | 6/6 |
+| Relocation during receiving | 0/6 | 5/6 | 0/6 | 4/6 |
+| Relocation during delivery | 0/6 | 5/6 | 0/6 | 3/6 |
+| Symmetric warehouse | 0/6 | 0/6 | 0/6 | 0/6 |
+| Repeated relocation | 0/6 | 0/6 | 0/6 | 0/6 |
+| **Total** | **5/30** | **16/30** | **5/30** | **13/30** |
+
+Recovery increased the observed delivery rate by **36.7 percentage points** and mission completion by **26.7 points**. All **52 injected relocations** were detected. In both modes the median was **0.240 s** from relocation to confirmed loss, **0.012 s** from loss to zero command and **1.25 s** from relocation to wheel settling. The **18 verified reopenings** took a median **2.67 s** from confirmed loss (P95 **2.69 s**). At reopening the median AMCL position error was **1.87 cm** (P95 **4.59 cm**) and median yaw error was **0.59°** (P95 **1.47°**).
+
+The benchmark observed **0 false resumes in 18 reopenings** and false stops in **2/30 hold-only** and **6/30 recovery-enabled** runs. All eight false stops reported `localization_stale` without a matching relocation. This prevented injection of the first planned relocation in one hold-only run and the second relocation in one recovery-enabled run. All six symmetric trials with recovery reported `NEEDS_HELP ambiguous_pose`. The five recovery-enabled repeat trials that received both relocations reported `NEEDS_HELP retry_limit` after the second relocation.
 
 ## Measure odometry error
 
