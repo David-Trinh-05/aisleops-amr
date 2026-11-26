@@ -175,7 +175,11 @@ Watch `/aisleops/localization/gate_state` and `/aisleops/mission_status` with `r
 
 Ambiguous evidence, conflicting candidates or a recovery timeout put the gate in `NEEDS_HELP` and preserve zero velocity. The stock warehouse has symmetric geometry that can trigger this outcome. For a warehouse with distinct landmarks, `world:=/path/to/warehouse.sdf` accepts an SDF containing a world named `warehouse` with the standard robot spawn and matching saved map. The same option can be used when building that map with `slam:=true`.
 
+If a retried leg loses localization again, the mission cancels the replacement goal and reports `NEEDS_HELP <leg> retry_limit`. The gate latches that terminal state, publishes zero velocity, and rejects both `localization/recover` and `localization/resume`. Start a new simulation and mission to clear the terminal hold.
+
 In a Gazebo trial with two additional static landmarks, the gate held zero for **52 commands** and reopened **2.58 s** after confirmed loss. The last verified AMCL pose before release was **3.0 cm** and **0.018 rad** from ground truth. The mission canceled the first receiving goal and then completed receiving, delivery and return in order. In the symmetric warehouse, recovery reported `NEEDS_HELP`, rejected a resume request and continued publishing zero velocity under injected motion commands.
+
+A separate trial relocated the robot during both delivery and return within one mission. The gate reopened **2.63 s** and **2.26 s** after confirmed loss, respectively, and each leg completed once. A second relocation on the same receiving leg produced `NEEDS_HELP retry_limit`. Over two simulated seconds of injected commands, the gate published **40 zero commands** and measured body drift was **0.2 mm**.
 
 ## Measure odometry error
 

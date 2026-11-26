@@ -36,6 +36,9 @@ public:
       "cmd_vel_guard_in", 10, [this](const Velocity & command) {forward(command);});
     if (declare_parameter<bool>("recover_localization", false)) {
       recovery_.emplace(*this);
+      mission_ = create_subscription<std_msgs::msg::String>(
+        "mission_status", rclcpp::QoS(10).transient_local(),
+        [this](const std_msgs::msg::String & event) {observe_mission(event.data);});
       recover_ = create_service<Trigger>(
         "localization/recover", [this](const std::shared_ptr<Trigger::Request>,
           std::shared_ptr<Trigger::Response> response) {
@@ -62,12 +65,31 @@ public:
   }
 
 private:
-  enum class State {waiting, open, hold};
+  enum class State {waiting, open, hold, needs_help};
+
+  void observe_mission(const std::string & event)
+  {
+    constexpr char prefix[] = "NEEDS_HELP ";
+    const auto start = sizeof(prefix) - 1;
+    if (state_ == State::needs_help || event.rfind(prefix, 0) != 0) {
+      return;
+    }
+    const auto separator = event.find(' ', start);
+    if (separator == std::string::npos || separator == start || separator + 1 == event.size()) {
+      return;
+    }
+    recovery_->finish();
+    state_ = State::needs_help;
+    reason_ = event.substr(separator + 1);
+    publish_zero();
+    publish_state();
+    RCLCPP_WARN(get_logger(), "Mission needs help (%s)", reason_.c_str());
+  }
 
   void observe(const Agreement & report)
   {
     check_health();
-    if (report.status.size() != 1) {
+    if (state_ == State::needs_help || report.status.size() != 1) {
       return;
     }
     std::string health;
@@ -187,6 +209,7 @@ private:
     switch (state_) {
       case State::waiting: status.data = "WAITING"; break;
       case State::open: status.data = "OPEN"; break;
+      case State::needs_help: status.data = "NEEDS_HELP " + reason_; break;
       case State::hold:
         status.data = recovery_ ? recovery_->status() : "";
         if (status.data.empty()) {
@@ -208,6 +231,7 @@ private:
   rclcpp::Publisher<GateStatus>::SharedPtr status_;
   rclcpp::Subscription<Agreement>::SharedPtr agreement_;
   rclcpp::Subscription<Velocity>::SharedPtr input_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mission_;
   rclcpp::Service<Trigger>::SharedPtr recover_, resume_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
