@@ -53,9 +53,8 @@ def verified_reopening(row, fault):
             and any(t >= opened and event == f"RESUMED {leg}" for t, event in row["events"]))
 
 
-def recovery_succeeded(row):
-    return (row["injected"] == 1 and verified_completion(row)
-            and verified_reopening(row, row["faults"][0]))
+def resumed_once(row):
+    return row["injected"] == 1 and verified_reopening(row, row["faults"][0])
 
 
 def held_for_operator(row):
@@ -84,8 +83,10 @@ def print_report(pairs, code, output):
     print("| --- | ---: |")
     continuations = [row for row in recover if row["planned"] == 1 and row["fault_plan"][0]["resumable"]]
     if continuations:
+        resumed = [row for row in continuations if resumed_once(row)]
+        print(f"| Verified pose and resumed the interrupted leg | {len(resumed)}/{len(continuations)} |")
         print(f"| Verified recovery, same-leg resume and all stops reached | "
-              f"{sum(recovery_succeeded(row) for row in continuations)}/{len(continuations)} |")
+              f"{sum(verified_completion(row) for row in resumed)}/{len(continuations)} |")
     for scenario, label in (("symmetric", "Held after ambiguous localization"),
                             ("repeat", "Held after a second relocation on the retried leg")):
         group = [row for row in recover if row["scenario"] == scenario]

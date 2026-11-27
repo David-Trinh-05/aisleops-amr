@@ -19,6 +19,18 @@ Use a fresh output directory for each measurement campaign. Restarting the same 
 
 The output contains one `result.json` per mode and seed with mission and gate events in simulation time. Each attempt also has ROS and Gazebo logs. `runs.csv` is the run-level summary, and `faults.csv` has one row per actual relocation. For a cloud run, use **Actions → ROS 2 checks → Run workflow** and select **Run all 30 recovery pairs and upload results**.
 
+## Published measurements
+
+The full benchmark and offset reports include CSV files and an archive of the JSON records consumed by the analyzer. To check the published full benchmark, extract the archive into an empty directory and point the analyzer at it.
+
+```bash
+record_dir=$(mktemp -d)
+tar -xzf benchmarks/recovery/results/warehouse/records.tar.gz -C "$record_dir"
+/usr/bin/python3 benchmarks/recovery/report.py "$record_dir"
+```
+
+[Full benchmark](results/warehouse/report.md) · [Offset benchmark](results/offsets/report.md)
+
 ## Read the results
 
 | Scenario | Expected recovery behavior |

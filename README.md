@@ -4,7 +4,7 @@ A warehouse AMR simulation built with ROS 2 Jazzy, Nav2 and Gazebo Harmonic. The
 
 [Run the recovery demo](demo/README.md#run-from-a-clone) · [Watch the recording](demo/recovery.mp4) · [Inspect the benchmark](#paired-simulation-comparison)
 
-Across 30 paired simulation trials, the robot completed **13/30 missions with recovery enabled** and **5/30 with hold-only behavior**. [Trial data](benchmarks/recovery/runs.csv)
+In the latest 30-pair benchmark, the robot completed **11/12 missions with a recoverable relocation** and correctly held for an operator in **12/12 ambiguous or repeated-fault trials**. [Benchmark results](benchmarks/recovery/results/warehouse/report.md)
 
 ![Gazebo warehouse and RViz showing the robot and its planned path on the delivery leg after recovery](demo/recovery-preview.jpg)
 
@@ -197,7 +197,7 @@ Pass `sim_seed:=17` to the warehouse launch to seed Gazebo. The trials pair a ho
 
 Delivery is scored against Gazebo ground truth at the reported arrival, within 0.25 m and 0.22 rad of the station. Completion applies the same check to all three stops. Detection, zero command, wheel settling and reopening delays use simulation time. The Jazzy AMCL particle filter seeds itself from wall time, so the pairing controls the planned inputs while AMCL and message scheduling can vary. [Nav2 Jazzy particle filter initialization](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_amcl/src/pf/pf.c#L43-L60)
 
-The benchmark completed **30 valid pairs (60 runs)** across Gazebo seeds 17, 23, 41, 53, 67 and 89.
+The original benchmark completed **30 valid pairs (60 runs)** across Gazebo seeds 17, 23, 41, 53, 67 and 89.
 
 The run-level CSV records delivery, full mission completion and fault counts for each scenario, seed and mode. The relocation-level CSV records each injected fault and the measured detection, stop and recovery times. Timestamps ending in `_ns` use simulation time in nanoseconds. A blank timing cell marks an event without a recorded measurement. [Runs CSV](benchmarks/recovery/runs.csv) · [Injected faults CSV](benchmarks/recovery/faults.csv)
 
@@ -215,6 +215,12 @@ Recovery increased the observed delivery rate by **36.7 percentage points** and 
 The benchmark observed **0 false resumes in 18 reopenings** and false stops in **2/30 hold-only** and **6/30 recovery-enabled** runs. All eight false stops reported `localization_stale` without a matching relocation. This prevented injection of the first planned relocation in one hold-only run and the second relocation in one recovery-enabled run. All six symmetric trials with recovery reported `NEEDS_HELP ambiguous_pose`. The five recovery-enabled repeat trials that received both relocations reported `NEEDS_HELP retry_limit` after the second relocation.
 
 A follow-up with loopback transport repeated all five scenarios on seeds 53, 67 and 89. The same 30 trial slots had **eight `localization_stale` stops** in the original run and **zero** in the follow-up. Recovery completed **9/15** missions and hold-only completed **3/15**. One hold-only run timed out waiting for the Nav2 planner to acknowledge a goal before the relocation was injected.
+
+### Latest results with loopback transport
+
+The full rerun completed 30 pairs with four workers. Recovery completed **16/30** missions and hold-only completed **6/30**. Recovery returned the robot to the interrupted leg and finished the mission in **11/12** planned recoverable relocation runs. The gate correctly held in **6/6** symmetric runs and **6/6** repeated-fault runs. It detected **53/53** actual relocations, with **0/17** false or unverified reopenings. Two early gate holds occurred before the first Nav2 goal. [Full rerun results and trial records](benchmarks/recovery/results/warehouse/report.md)
+
+In four additional position and heading combinations, recovery verified localization and resumed the interrupted leg in **4/4** runs. Both receiving runs completed. In both delivery runs Nav2 reported `Failed to make progress` after reopening. A separate two-second LiDAR gap caused a Nav2 abort. The gate sent zero velocity and remained held after scans returned. [Offset results](benchmarks/recovery/results/offsets/report.md) · [LiDAR gap test](tests/lidar_gap.py)
 
 ## Measure odometry error
 
