@@ -1,0 +1,63 @@
+name: ROS 2 checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Run all 30 recovery pairs and upload results
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy-ros-base
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git build-essential python3-colcon-common-extensions \
+            ros-jazzy-rosidl-default-generators ros-jazzy-ros-gz ros-jazzy-xacro \
+            ros-jazzy-navigation2 ros-jazzy-nav2-common libegl-mesa0 libgl1-mesa-dri
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Build ROS packages
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths src --packages-up-to aisleops_mission \
+            --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3 -DCMAKE_BUILD_TYPE=Release
+      - name: Check scan health, pose evidence and velocity gate
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          bash scripts/check.sh
+      - name: Smoke test the headless warehouse
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          /usr/bin/python3 scripts/smoke.py --warehouse
+      - name: Run the paired recovery benchmark
+        if: github.event_name == 'workflow_dispatch' && inputs.benchmark
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          /usr/bin/python3 benchmarks/recovery/run.py --jobs 2 --output benchmark-results
+          /usr/bin/python3 benchmarks/recovery/report.py benchmark-results > benchmark-results/report.md
+      - name: Upload benchmark records
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-benchmark
+          path: benchmark-results/
+          if-no-files-found: ignore

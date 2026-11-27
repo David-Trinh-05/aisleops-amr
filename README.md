@@ -191,6 +191,8 @@ A separate trial relocated the robot during both delivery and return within one 
 
 ## Paired simulation comparison
 
+[Run the paired benchmark from a clone](benchmarks/recovery/README.md).
+
 Pass `sim_seed:=17` to the warehouse launch to seed Gazebo. The trials pair a hold-only run and a recovery-enabled run using the same map, Gazebo seed, and planned relocation. The five cases cover a nominal mission, one relocation during receiving, one during delivery, a symmetric warehouse, and two relocations on the receiving leg. The second relocation is triggered only after a replacement goal starts.
 
 Delivery is scored against Gazebo ground truth at the reported arrival, within 0.25 m and 0.22 rad of the station. Completion applies the same check to all three stops. Detection, zero command, wheel settling and reopening delays use simulation time. The Jazzy AMCL particle filter seeds itself from wall time, so the pairing controls the planned inputs while AMCL and message scheduling can vary. [Nav2 Jazzy particle filter initialization](https://github.com/ros-navigation/navigation2/blob/jazzy/nav2_amcl/src/pf/pf.c#L43-L60)
@@ -237,8 +239,10 @@ The CSV records both poses and the errors for each leg.
 
 ```bash
 /usr/bin/python3 scripts/smoke.py --warehouse
-/usr/bin/python3 scripts/test_trajectory.py
+bash scripts/check.sh
 ```
+
+Build and source both workspace packages before running `scripts/check.sh`. GitHub Actions builds both packages and runs the regression checks and headless smoke test on pushes to main and pull requests.
 
 The warehouse smoke test checks simulation time, TF at the LiDAR timestamp, IMU readings and the response to drive commands. Each run starts and stops its own Gazebo and ROS processes.
 
